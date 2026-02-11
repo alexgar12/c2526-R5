@@ -1,6 +1,6 @@
-## Proyecto PD1 - Grupo 5.
+# Proyecto PD1 - Grupo 5.
 
-# Estructura de almacenamiento en MinIO
+## Estructura de almacenamiento en MinIO
 
 Los datos del proyecto se almacenan en un bucket S3-compatible (MinIO),
 siguiendo una arquitectura tipo data lake organizada en distintas capas
@@ -14,9 +14,13 @@ Raíz del proyecto: `grupo5/`
 ## Estructura general
 
 pd1/
+
 └── grupo5/
+
     ├── raw/
+    
     │   ├── gtfs_static/
+    
     │   ├── gtfs_realtime/
     │   ├── weather/
     │   └── events/
