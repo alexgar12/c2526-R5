@@ -22,6 +22,8 @@ dependencies = [
   "tzdata==2025.3",
   "tqdm==4.67.1",
   "minio>=7.2.20",
+  "rich>=14.3.2",
+  "tabulate>=0.9.0",
 ]
 
 [project.optional-dependencies]
