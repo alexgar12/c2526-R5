@@ -21,4 +21,4 @@ data/processed/*
 .DS_Store
 
 #parquet
-.parquet
+*.parquet
