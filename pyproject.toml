@@ -1,42 +1,37 @@
 [project]
 name = "c2526-r5"
 version = "0.1.0"
-requires-python = ">=3.10"
+description = "Proyecto de Datos I (Grupo 5) - pipeline y API"
+readme = "README.md"
+requires-python = ">=3.13"
+
 dependencies = [
-  "numpy==2.2.6",
-  "pandas==2.3.3",
-  "pyarrow==23.0.0",
-  "requests==2.32.5",
-  "requests-cache==1.2.1",
-  "retry-requests==2.0.0",
-  "urllib3==2.6.3",
-  "urllib3-future==2.15.901",
-  "niquests==3.17.0",
-  "openmeteo-requests==1.7.5",
-  "openmeteo-sdk==1.25.0",
-  "gtfs-realtime-bindings==2.0.0",
-  "protobuf==6.33.5",
-  "python-dateutil==2.9.0.post0",
-  "python-dotenv==1.2.1",
-  "pytz==2025.2",
-  "tzdata==2025.3",
-  "tqdm==4.67.1",
-  "minio>=7.2.20",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "requests",
+  "requests-cache",
+  "retry-requests",
+  "python-dateutil",
+  "python-dotenv",
+  "pytz",
+  "tzdata",
+  "tqdm",
+  "openmeteo-requests",
+  "gtfs-realtime-bindings",
+  "protobuf",
+  "minio",
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+  "pydantic-settings",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "ipython==8.38.0",
-  "ipykernel==7.1.0",
-  "jupyter-client==8.8.0",
-  "jupyter-core==5.9.1",
-  "debugpy==1.8.20",
-  "matplotlib-inline==0.2.1",
-  "traitlets==5.14.3",
-  "prompt-toolkit==3.0.52",
-  "pygments==2.19.2",
-  "stack-data==0.6.3",
-  "decorator==5.2.1",
-  "psutil==7.2.2",
-  "colorama==0.4.6",
+  "pytest",
+  "ruff",
+  "mypy",
+  "pre-commit",
+  "ipykernel",
 ]
