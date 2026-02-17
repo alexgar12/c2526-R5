@@ -22,3 +22,9 @@ data/processed/*
 
 #parquet
 *.parquet
+
+#json
+.json
+
+#csv
+.csv

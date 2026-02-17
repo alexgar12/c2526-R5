@@ -32,7 +32,7 @@ def extraccion_actual(ini, fin, token):
     df = pd.DataFrame(data)
     return df
 
-TOKEN = os.getenv("NYCOPENDATA_TOKEN")
+TOKEN = os.getenv("NYC_OPEN_DATA_TOKEN")
 assert TOKEN is not None, "Falta la variable de entorno NYCOPENDATA_TOKEN"
 
 inicio_2025 = desde_fecha('2025-01-01')
