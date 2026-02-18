@@ -27,6 +27,7 @@ dependencies = [
   "pydantic-settings",
   "pymongo>=4.16.0",
   "rich>=14.3.2",
+  "geopy>=2.4.1",
 ]
 
 [dependency-groups]
