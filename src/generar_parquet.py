@@ -1,6 +1,6 @@
 import tarfile
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -8,14 +8,14 @@ from tqdm import tqdm
 from google.transit import gtfs_realtime_pb2
 from google.protobuf.message import DecodeError
 
-fecha = "2025-12-30"
+fecha = "2026-02-02"
 
-RAW_DIR = Path(f"data/raw/{fecha}")
+RAW_DIR = Path(f"data/raw")
 TAR_PATH = next(RAW_DIR.glob(f"subwaydatanyc_{fecha}_gtfsrt_*.tar.xz"))
-OUT_DIR = Path(f"data/parsed_events/date={fecha}")
+OUT_DIR = Path(f"data/raw/parquet_compressed/cada_60s/date={fecha}")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-BATCH_SIZE = 50_000
+BATCH_SIZE = 200_000
 
 TS_RE = re.compile(r"nycsubway_([A-Za-z0-9_]+)_(\d{8}T\d{6}(?:\.\d+)?)Z_")
 
@@ -88,6 +88,8 @@ def main():
     skipped = 0
 
     with tarfile.open(TAR_PATH, "r:*") as tar:
+        last_bucket = {}  # feed_id -> datetime del bucket (30s)
+
         members = [m for m in tar.getmembers() if m.name.endswith(".gtfsrt")]
 
         for member in tqdm(members, desc="Procesando snapshots"):
@@ -108,6 +110,16 @@ def main():
             except ValueError:
                 bad += 1
                 continue
+            
+            # downsampling: 1 snapshot por cada 30s y por feed 
+            bucket_ts = snapshot_ts.replace(microsecond=0)
+            bucket_ts = bucket_ts - timedelta(seconds=bucket_ts.second % 30)
+
+            prev = last_bucket.get(feed_id)
+            if prev == bucket_ts:
+                skipped += 1
+                continue
+            last_bucket[feed_id] = bucket_ts
 
             # filtrar feeds no operativos (ej: alerts)
             if feed_id not in ALLOWED_FEEDS:
@@ -136,7 +148,7 @@ def main():
                 df["stop_id"] = df["stop_id"].astype("string")
 
                 out = OUT_DIR / f"events_part_{part}.parquet"
-                df.to_parquet(out, index=False)
+                df.to_parquet(out, index=False, compression="snappy")
                 batch.clear()
                 part += 1
 
@@ -151,7 +163,7 @@ def main():
             df["route_id"] = df["route_id"].astype("string")
             df["stop_id"] = df["stop_id"].astype("string")
             out = OUT_DIR / f"events_part_{part}.parquet"
-            df.to_parquet(out, index=False)
+            df.to_parquet(out, index=False, compression="snappy")
 
     print(f"Snapshots OK: {ok} | Bad/invalid: {bad} | Skipped feeds: {skipped}")
 

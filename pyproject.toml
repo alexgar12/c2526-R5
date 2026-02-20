@@ -28,6 +28,7 @@ dependencies = [
   "pymongo>=4.16.0",
   "rich>=14.3.2",
   "geopy>=2.4.1",
+  "matplotlib>=3.10.8",
 ]
 
 [dependency-groups]
