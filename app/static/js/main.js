@@ -585,7 +585,7 @@ async function openTrainPopup(train, marker) {
     if (popup?.isOpen()) popup.setContent(fullHtml);
 }
 
-const TRAIN_REFRESH_S = 90;
+const TRAIN_REFRESH_S = 30;
 let _cdTimer = null;
 
 function _tickCountdown(s) {

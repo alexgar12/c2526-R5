@@ -65,13 +65,16 @@ def fetch_positions(
             logger.warning("Feed %s unavailable: %s", feed_key, exc)
             continue
 
-        # Trips that have at least one stop already in the past
         now_ts = int(time.time())
+        # Trips con trip_update que tienen al menos una parada en el pasado
         started_trips: set[str] = set()
+        # Trips con trip_update (aunque sea todo futuro) — tienen horario RT
+        trips_with_update: set[str] = set()
         for entity in msg.entity:
             if not entity.HasField("trip_update"):
                 continue
             tu = entity.trip_update
+            trips_with_update.add(tu.trip.trip_id)
             for stu in tu.stop_time_update:
                 arrival = stu.arrival.time if stu.HasField("arrival") else 0
                 departure = stu.departure.time if stu.HasField("departure") else 0
@@ -86,9 +89,13 @@ def fetch_positions(
             v = entity.vehicle
             if not v.trip.trip_id or not v.stop_id:
                 continue
-            # ADDED (1) y UNSCHEDULED (2) pueden no tener trip_update → dejar pasar
-            is_unscheduled = v.trip.schedule_relationship in (1, 2)
-            if not is_unscheduled and v.trip.trip_id not in started_trips:
+
+            trip_id = v.trip.trip_id
+            has_update = trip_id in trips_with_update
+            # Sin trip_update en el feed → tren sin horario RT (lo mostramos pero no predecimos)
+            is_unscheduled = not has_update
+            # Con trip_update pero todas las paradas en el futuro → pre-asignado, no mostrar
+            if has_update and trip_id not in started_trips:
                 continue
 
             stop_id = v.stop_id
@@ -96,9 +103,6 @@ def fetch_positions(
 
             route_norm = _normalize_route(v.trip.route_id)
 
-            # Para trenes no programados: si no hay coords en gtfs_stops, usar
-            # la posición GPS del propio entity.vehicle si está disponible.
-            # Si tampoco hay route_norm, usar el route_id tal cual (truncado).
             if coords is None:
                 if is_unscheduled and v.HasField("position"):
                     coords = (v.position.latitude, v.position.longitude)
@@ -122,7 +126,6 @@ def fetch_positions(
                         lon = (lon + prev[1]) / 2
 
             direction = "N" if stop_id.endswith("N") else "S" if stop_id.endswith("S") else None
-            scheduled = v.trip.schedule_relationship == 0
             results.append({
                 "route_id": route_norm,
                 "trip_id": v.trip.trip_id,
@@ -132,7 +135,7 @@ def fetch_positions(
                 "schedule_relationship": v.trip.schedule_relationship,
                 "direction": direction,
                 "status": v.current_status,
-                "is_predictable": scheduled,
+                "is_predictable": not is_unscheduled,
             })
 
     logger.info("Vehicle positions: %d trains fetched", len(results))
