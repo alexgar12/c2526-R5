@@ -18,7 +18,7 @@ import io
 import json
 import os
 from pathlib import Path
-from time import time
+import time
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -50,16 +50,10 @@ def get_drive_service():
     En GitHub Actions, reconstruye token_drive.json desde el secret
     GDRIVE_TOKEN_JSON antes de crear el servicio.
     """
-    # Si estamos en GitHub Actions, reconstruir el token desde el secret
-    token_json_content = os.getenv("GDRIVE_TOKEN_JSON")
-    if token_json_content:
-        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_PATH.write_text(token_json_content)
-
     if not TOKEN_PATH.exists():
         raise RuntimeError(
             "token_drive.json no encontrado. "
-            "Ejecuta generar_token_drive.py localmente para generarlo."
+            "Ejecuta generar_token_drive.py localmente para generarlo, o monta el archivo en el contenedor."
         )
 
     creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)

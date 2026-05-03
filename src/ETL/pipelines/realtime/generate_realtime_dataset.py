@@ -9,15 +9,17 @@ fuentes en vivo del metro de Nueva York.
 
 
 Uso:
-  python generate_realtime_dataset.py
+  uv run src/ETL/pipelines/realtime/generate_realtime_dataset.py
 
 """
 
 import base64
 import gc
+import io
 import math
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -30,6 +32,10 @@ import requests
 from retry_requests import retry
 from scipy import stats
 
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+
 from src.ETL.tiempo_real_metro.realtime_data import (
     creacion_df_tiempo_real,
     creacion_df_previsto,
@@ -38,20 +44,29 @@ from src.ETL.tiempo_real_metro.realtime_data import (
     hora_ciclica,
 )
 from src.ETL.clima.clima_realtime import extraer_clima_actual
-from src.ETL.eventos.ingest_actual_eventos import (
-    api_seatgeek,
-    api_nycopendata,
-    api_espn,
-)
 from src.ETL.alertas_oficiales_tiempo_real.extract_alertas_oficiales_tiempo_real import (
     get_gmail_service,
     parse_mta_body,
 )
-from src.ETL.eventos.utils_eventos import (
-    cargar_paradas_df,
-    fusionar_lista_estaciones,
-)
-from src.ETL.eventos.transform import _construir_tabla_correspondencias_stop_id
+
+# ── Drive config ──────────────────
+_SCOPES = ['https://www.googleapis.com/auth/drive']
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent / "alertas_oficiales_tiempo_real"
+_TOKEN_PATH = _BASE_DIR / "token_drive.json"
+
+
+def _get_drive_service():
+    token_json_content = os.getenv("GDRIVE_TOKEN_JSON")
+    if token_json_content:
+        _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_PATH.write_text(token_json_content)
+    if not _TOKEN_PATH.exists():
+        raise RuntimeError("token_drive.json no encontrado.")
+    creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), _SCOPES)
+    if not creds.valid and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        _TOKEN_PATH.write_text(creds.to_json())
+    return build('drive', 'v3', credentials=creds)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -335,169 +350,62 @@ def load_realtime_weather() -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────
 
 
-def _fusionar_eventos_con_tipo(df_seat, df_nyc, df_espn):
-    """
-    Igual que ingest_actual_eventos.fusionar_dataframes pero conservando
-    la columna `tipo` de cada fuente, necesaria para calcular
-    tipo_referente en el cruce con GTFS.
-    """
-
-    dfs = []
-
-    if df_seat is not None and not df_seat.empty:
-        df_seat = df_seat.copy()
-        df_seat["score"] = (df_seat["popularidad_score"] + df_seat["venue_score"]) / 2
-        df_seat = df_seat.drop(
-            columns=["popularidad_score", "venue_score", "capacidad"],
-            errors="ignore",
-        )
-        dfs.append(df_seat)
-
-    if df_nyc is not None and not df_nyc.empty:
-        df_nyc = df_nyc.copy()
-        df_nyc["score"] = df_nyc["nivel_riesgo_tipo"] / 10
-        df_nyc = df_nyc.drop(columns=["nivel_riesgo_tipo"], errors="ignore")
-        dfs.append(df_nyc)
-
-    if df_espn is not None and not df_espn.empty:
-        dfs.append(df_espn.copy())
-
-    if not dfs:
-        return pd.DataFrame()
-
-    cols_comunes = [
-        "nombre_evento", "hora_inicio", "hora_salida_estimada",
-        "score", "paradas_afectadas", "tipo",
-    ]
-    df_final = pd.concat(
-        [d[[c for c in cols_comunes if c in d.columns]] for d in dfs],
-        ignore_index=True,
-    )
-
-    def fusionar_grupo(grupo):
-        paradas_unidas = []
-        for p in grupo["paradas_afectadas"]:
-            if isinstance(p, list):
-                paradas_unidas.extend(p)
-        return pd.Series({
-            "hora_salida_estimada": grupo["hora_salida_estimada"].iloc[0],
-            "score":                grupo["score"].max(),
-            "paradas_afectadas":    fusionar_lista_estaciones(paradas_unidas),
-            "tipo":                 grupo.sort_values("score", ascending=False)["tipo"].iloc[0],
-        })
-
-    df_final = (
-        df_final
-        .groupby(["nombre_evento", "hora_inicio"], as_index=False)
-        .apply(fusionar_grupo, include_groups=False)
-        .reset_index(drop=True)
-    )
-    df_final = df_final.sort_values("score", ascending=False).reset_index(drop=True)
-    return df_final
-
-
 def load_realtime_events() -> pd.DataFrame:
     """
-    Extrae los eventos del día desde SeatGeek, NYC Open Data y ESPN.
-      nombre_evento, tipo, hora_inicio, hora_salida_estimada, score,
-      paradas_afectadas, stop_id, fecha_inicio, fecha_final, date.
+    Lee eventos_hoy.parquet desde Google Drive (MTA_Daily_Data/eventos/).
+    El archivo lo genera y sube ingest_actual_eventos.ingest_eventos() a través
+    de upload_daily_data.py, y ya incluye todas las transformaciones necesarias
+    para el merge con GTFS (stop_id, parada_nombre, parada_lineas, etc.).
+
+    Si el archivo no existe en Drive o falla la lectura, devuelve DataFrame vacío.
     """
     print("  [EVENTOS RT] Extrayendo eventos del día...")
 
-    df_paradas = cargar_paradas_df()
-
-    df_seat, df_nyc, df_espn = None, None, None
-
     try:
-        df_seat = api_seatgeek(df_paradas)
-        if df_seat is not None and not df_seat.empty:
-            df_seat["tipo"] = "Concierto"
-        print(f"    SeatGeek: {len(df_seat) if df_seat is not None else 0} eventos")
+        service = _get_drive_service()
+
+        # Buscar carpeta MTA_Daily_Data/eventos
+        folder_query = (
+            "name = 'eventos' "
+            "and mimeType = 'application/vnd.google-apps.folder' "
+            "and trashed = false"
+        )
+        folder_result = service.files().list(
+            q=folder_query, fields='files(id, name)'
+        ).execute()
+        folders = folder_result.get('files', [])
+        if not folders:
+            print("  [EVENTOS RT] Carpeta 'eventos' no encontrada en Drive.")
+            return pd.DataFrame()
+
+        folder_id = folders[0]['id']
+
+        # Buscar el archivo eventos_hoy.parquet
+        file_query = (
+            f"name = 'eventos_hoy.parquet' "
+            f"and '{folder_id}' in parents "
+            f"and trashed = false"
+        )
+        file_result = service.files().list(
+            q=file_query, fields='files(id, name)'
+        ).execute()
+        files = file_result.get('files', [])
+        if not files:
+            print("  [EVENTOS RT] eventos_hoy.parquet no encontrado en Drive.")
+            return pd.DataFrame()
+
+        file_id = files[0]['id']
+
+        # Descargar y leer como parquet
+        content = service.files().get_media(fileId=file_id).execute()
+        df = pd.read_parquet(io.BytesIO(content))
+
+        print(f"  [EVENTOS RT] {len(df)} filas cargadas desde Drive.")
+        return df
+
     except Exception as e:
-        print(f"    SeatGeek error: {e}")
-
-    try:
-        df_nyc = api_nycopendata(df_paradas)
-        if df_nyc is not None and not df_nyc.empty:
-            df_nyc["tipo"] = "Evento_Publico"
-        print(f"    NYC Open Data: {len(df_nyc) if df_nyc is not None else 0} eventos")
-    except Exception as e:
-        print(f"    NYC Open Data error: {e}")
-
-    try:
-        df_espn = api_espn(df_paradas)
-        if df_espn is not None and not df_espn.empty:
-            df_espn["tipo"] = "Deporte"
-        print(f"    ESPN: {len(df_espn) if df_espn is not None else 0} eventos")
-    except Exception as e:
-        print(f"    ESPN error: {e}")
-
-    df = _fusionar_eventos_con_tipo(df_seat, df_nyc, df_espn)
-
-    if df.empty:
-        print("  [EVENTOS RT] Sin eventos hoy.")
+        print(f"  [EVENTOS RT] Error leyendo desde Drive: {e}. Devolviendo vacío.")
         return pd.DataFrame()
-
-
-    # Score default a 1.0 si falta o es NaN
-    if "score" in df.columns:
-        df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(1.0)
-    else:
-        df["score"] = 1.0
-
-    # Añadir columnas temporales a partir de las strings de hora y la fecha actual
-    hoy = datetime.now(tz=ZoneInfo("America/New_York")).date()
-
-    df["fecha_inicio"] = pd.to_datetime(
-        df["hora_inicio"].apply(lambda h: f"{hoy} {h}"),
-        errors="coerce",
-    )
-    df["fecha_final"] = pd.to_datetime(
-        df["hora_salida_estimada"].apply(lambda h: f"{hoy} {h}"),
-        errors="coerce",
-    )
-    df["date"] = hoy
-
-    # fecha_final con fallback a fecha_inicio (alineado con histórico)
-    df["fecha_final"] = df["fecha_final"].fillna(df["fecha_inicio"])
-
-    # Normalizar paradas_afectadas a lista de tuplas (función del histórico)
-    from src.ETL.eventos.transform import _normalizar_paradas
-    df["paradas_afectadas"] = df["paradas_afectadas"].apply(_normalizar_paradas)
-
-    # Descartar eventos sin ninguna parada afectada
-    df = df[df["paradas_afectadas"].map(len) > 0].copy()
-    if df.empty:
-        print("  [EVENTOS RT] Todas las filas sin paradas afectadas.")
-        return pd.DataFrame()
-
-    # Explode paradas_afectadas → una fila por parada
-    # Cada elemento de paradas_afectadas es (nombre_parada, lineas_str)
-    df = df.explode("paradas_afectadas", ignore_index=True)
-    df = df[df["paradas_afectadas"].notna()].copy()
-
-    df["parada_nombre"] = df["paradas_afectadas"].apply(
-        lambda x: x[0] if isinstance(x, (tuple, list)) and len(x) >= 1 else None
-    )
-    df["parada_lineas"] = df["paradas_afectadas"].apply(
-        lambda x: x[1] if isinstance(x, (tuple, list)) and len(x) >= 2 else None
-    )
-
-    # Obtener stop_id desde la tabla de correspondencias 
-    print("  [EVENTOS RT] Construyendo tabla de correspondencias stop_id...")
-    tabla_correspondencias = _construir_tabla_correspondencias_stop_id()
-
-    df["stop_id"] = df["parada_nombre"].map(
-        lambda n: tabla_correspondencias.get(n, [None])
-    )
-    df = df.explode("stop_id", ignore_index=True)
-    df = df[df["stop_id"].notna()].copy()
-    df = df[df["stop_id"].str.endswith(("N", "S"), na=False)]
-    df["stop_id"] = df["stop_id"].astype("string")
-    df.drop_duplicates(subset=["nombre_evento", "stop_id"], inplace=True)
-
-    print(f"  [EVENTOS RT] {len(df)} filas tras explode de paradas.")
-    return df
 
 
 # ──────────────────────────────────────────────────────────────
