@@ -125,7 +125,6 @@ def extraccion_linea(url, linea, reintentos=3):
                 print(f"  [ERROR] Línea {linea} fallida tras {reintentos} intentos: {e}")
                 return []
             espera = 2 ** intento
-            print(f"  [WARN] Línea {linea} intento {intento + 1} fallido, reintentando en {espera}s...")
             time.sleep(espera)
 
 
@@ -305,7 +304,20 @@ def creacion_df_previsto():
     url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
 
     with urllib.request.urlopen(url) as response:
-        zip_data = io.BytesIO(response.read())
+        total_size = response.headers.get("Content-Length")
+        total_size = int(total_size) if total_size and total_size.isdigit() else None
+        chunk_size = 1024 * 1024
+        downloaded = 0
+        chunks = []
+
+        while True:
+            chunk = response.read(chunk_size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            downloaded += len(chunk)
+
+    zip_data = io.BytesIO(b"".join(chunks))
 
     with zipfile.ZipFile(zip_data, 'r') as z:
         with z.open("stop_times.txt") as f:
@@ -321,8 +333,6 @@ def creacion_df_previsto():
     df['departure_time'] = normalizar_horas(df['departure_time'])
 
     df['segundos_previstos'] = df['arrival_time'].apply(hora_a_segundos)
-
-    print(f"  DataFrame previsto: {len(df)} filas")
 
     return df
 
@@ -439,12 +449,71 @@ def union_dataframes(df1, df2):
     y aplica las transformaciones finales.
     """
 
-    # La clave de join es (viaje_id, parada_id). No se usa 'dia'/'day' porque el
-    # campo 'day' del GTFS suplementado contiene IDs de calendario arbitrarios
-    # además de 'Weekday'/'Saturday'/'Sunday', lo que destruye el 89% de los matches.
-    df = pd.merge(df1, df2, left_on=['viaje_id', 'parada_id'],
-              right_on=['trip_id', 'stop_id'],
-              how='left')
+    # Intentar primero merge que respete el día de servicio (Weekday/Saturday/Sunday)
+    # para evitar elegir el calendario equivocado cuando exista la misma
+    # (trip_id, stop_id) repetido para varios periodos. df1 tiene la columna
+    # 'dia' (creada en creacion_df_tiempo_real) y df2 tiene 'day' extraída del
+    # trip_id en creacion_df_previsto, por lo que podemos hacer un merge
+    # izquierdo usando esa columna.
+    df = pd.merge(
+        df1,
+        df2,
+        left_on=['viaje_id', 'parada_id', 'dia'],
+        right_on=['trip_id', 'stop_id', 'day'],
+        how='left',
+        suffixes=('', '_sched'),
+        indicator=True
+    )
+
+    # Para las filas que no encontraron match por día, intentar un merge de
+    # fallback ignorando el campo 'day' (comportamiento anterior). Solo rellenar
+    # las columnas de schedule cuando estaban ausentes en el merge por día,
+    # preservando así los matches por día cuando existan.
+    missing_mask = df['_merge'] == 'left_only'
+    if missing_mask.any():
+        # Extraer las filas no-matcheadas directamente del DataFrame fusionado
+        # Esto evita problemas de desalineación de índices entre `df` y `df1`.
+        df1_missing = df.loc[missing_mask, df1.columns].copy()
+        df1_missing['_row_id'] = df1_missing.index
+        
+        fallback = pd.merge(
+            df1_missing,
+            df2,
+            left_on=['viaje_id', 'parada_id'],
+            right_on=['trip_id', 'stop_id'],
+            how='left',
+            suffixes=('', '_fb')
+        )
+
+        # Si un mismo (viaje_id, parada_id) tiene varias filas de schedule,
+        # nos quedamos con la primera coincidencia estable por fila original.
+        # Así cada índice left-only recibe como mucho una fila de fallback.
+        fallback = (
+            fallback
+            .sort_values(['_row_id'])
+            .drop_duplicates(subset=['_row_id'], keep='first')
+            .set_index('_row_id')
+        )
+
+        # Rellenar columnas de schedule solo donde estaban NaN
+        sched_cols = [c for c in fallback.columns if c not in df1.columns]
+        for col in sched_cols:
+            if col in df.columns:
+                # Rellenar solo las filas que fueron left_only
+                df.loc[df1_missing.index, col] = fallback[col].reindex(df1_missing.index).values
+            else:
+                # Añadir columna nueva (solo para filas missing)
+                series = pd.Series(index=df.index, dtype=fallback[col].dtype if col in fallback.columns else object)
+                series.loc[df1_missing.index] = fallback[col].reindex(df1_missing.index).values
+                df[col] = series
+
+        # Limpiar columnas auxiliares del fallback
+        fb_cols = [c for c in df.columns if c.endswith('_fb')]
+        if fb_cols:
+            df = df.drop(columns=fb_cols)
+
+    # Limpiar columna de indicador de merge
+    df = df.drop(columns=['_merge'])
 
     # Marcar trenes no programados: no encontraron match en el schedule
     df['is_unscheduled'] = df['trip_id'].isna()
@@ -517,7 +586,6 @@ if __name__ == "__main__":
     if df_real_time is None or df_previsto is None:
         print("\n[FATAL] No se puede continuar: uno o ambos DataFrames no se pudieron obtener.")
         exit(1)
-
     try:
         print("\nUniendo DataFrames...")
         df_final = union_dataframes(df_real_time, df_previsto)
@@ -525,7 +593,6 @@ if __name__ == "__main__":
         print(f"  [ERROR] Unión de DataFrames: {e}")
         exit(1)
 
-    import os
     ruta = "/tmp/realtime_data.parquet"
     df_final.to_parquet(ruta, index=False)
-    print(f"\nGuardado en {ruta} ({os.path.getsize(ruta) / 1024:.1f} KB, {len(df_final)} filas)")
+    print(f"\nGuardado en {ruta} ({ruta.stat().st_size / 1024:.1f} KB, {len(df_final)} filas)")
