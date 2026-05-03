@@ -302,7 +302,7 @@ def creacion_df_previsto():
     Creación de dataframe de horarios previstos
     """
 
-    url = "e"
+    url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
 
     with urllib.request.urlopen(url) as response:
         total_size = response.headers.get("Content-Length")
