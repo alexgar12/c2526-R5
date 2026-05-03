@@ -26,7 +26,7 @@ from src.common.minio_client import upload_df_parquet
 # Si se modifican, hay que borrar token.json para regenerarlo.
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 CREDENTIALS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
 
