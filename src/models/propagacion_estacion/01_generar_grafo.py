@@ -63,8 +63,11 @@ def descargar_gtfs(start: str, end: str) -> pd.DataFrame:
 
 
 def construir_edges(df: pd.DataFrame) -> pd.DataFrame:
-    """Extrae aristas (stop_id → next_stop_id) con tiempo mediano de viaje."""
+    """Extrae aristas (route_stop → next_route_stop) con tiempo mediano de viaje.
 
+    El nodo es la clave compuesta '{route_id}_{stop_id}', de modo que paradas
+    físicamente compartidas por varias líneas se representan como nodos distintos.
+    """
     df = df.sort_values(['trip_uid', 'scheduled_seconds']).reset_index(drop=True)
     df['next_stop_id']           = df.groupby('trip_uid')['stop_id'].shift(-1)
     df['next_scheduled_seconds'] = df.groupby('trip_uid')['scheduled_seconds'].shift(-1)
@@ -76,7 +79,11 @@ def construir_edges(df: pd.DataFrame) -> pd.DataFrame:
     edges['travel_time'] = edges['next_scheduled_seconds'] - edges['scheduled_seconds']
     edges = edges[edges['travel_time'] > 0]
 
-    graph_df = edges.groupby(['stop_id', 'next_stop_id']).agg(
+    # Clave compuesta: identifica de forma única una parada dentro de su línea
+    edges['node_src'] = edges['route_id'].astype(str) + '_' + edges['stop_id'].astype(str)
+    edges['node_dst'] = edges['route_id'].astype(str) + '_' + edges['next_stop_id'].astype(str)
+
+    graph_df = edges.groupby(['node_src', 'node_dst']).agg(
         median_travel_time=('travel_time', 'median'),
         trip_count=('trip_uid', 'count'),
     ).reset_index()
@@ -90,12 +97,12 @@ def construir_edges(df: pd.DataFrame) -> pd.DataFrame:
 def construir_tensores(graph_df: pd.DataFrame):
     """Convierte graph_df a edge_index y edge_weight con Gaussian Kernel."""
 
-    nodes     = sorted(set(graph_df['stop_id']) | set(graph_df['next_stop_id']))
+    nodes     = sorted(set(graph_df['node_src']) | set(graph_df['node_dst']))
     n_nodes   = len(nodes)
     node2idx  = {s: i for i, s in enumerate(nodes)}
 
-    src_idx = graph_df['stop_id'].map(node2idx).values
-    dst_idx = graph_df['next_stop_id'].map(node2idx).values
+    src_idx = graph_df['node_src'].map(node2idx).values
+    dst_idx = graph_df['node_dst'].map(node2idx).values
 
     distances = graph_df['median_travel_time'].values
     sigma     = distances.std()
