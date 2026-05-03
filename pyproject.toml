@@ -2,7 +2,6 @@
 name = "c2526-r5"
 version = "0.1.0"
 description = "Proyecto de Datos I (Grupo 5) - pipeline y API"
-readme = "README.md"
 requires-python = ">=3.13"
 
 dependencies = [
