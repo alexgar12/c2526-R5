@@ -1,6 +1,7 @@
 **/.*
 **/__pycache__
 **/*.pyc
+**/*.ipynb
 data/
 tmp/
 artifacts/

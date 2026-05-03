@@ -87,18 +87,46 @@ async def lifespan(app: FastAPI):
 
 
 def _load_stations_meta() -> dict:
-    """Load station coordinates from local CSV or NY.gov API."""
-    local = os.path.join(os.path.dirname(__file__), "MTA_Subway_Stations.csv")
-    remote = "https://data.ny.gov/api/views/39hk-dx4f/rows.csv?accessType=DOWNLOAD"
+    """Load station coordinates from Drive, local CSV, or NY.gov API."""
+    from app.data.drive import download_daily_file
 
     df = None
-    for source in (local, remote):
+
+    # 1) Drive (fuente principal)
+    try:
+        from app.data.drive import _get_service, _get_folder_id, _DEFAULT_TOKEN_PATH
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        service = _get_service(_DEFAULT_TOKEN_PATH)
+        root_id = _get_folder_id(service, "MTA_Daily_Data")
+        folder_id = _get_folder_id(service, "GTFS_estatic", parent_id=root_id)
+        result = service.files().list(
+            q=f"'{folder_id}' in parents and name = 'MTA_Subway_Stations.csv' and trashed = false",
+            fields="files(id, name)", pageSize=1,
+        ).execute()
+        files = result.get("files", [])
+        if not files:
+            raise FileNotFoundError("MTA_Subway_Stations.csv no encontrado en Drive/GTFS_estatic")
+        file_id = files[0]["id"]
+        req = service.files().get_media(fileId=file_id)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        buf.seek(0)
+        df = pd.read_csv(buf)
+        logger.info("Station metadata loaded from Drive (%d rows)", len(df))
+    except Exception as exc:
+        logger.warning("Drive stations not available: %s", exc)
+
+    # 2) NY.gov (último recurso)
+    if df is None:
         try:
-            df = pd.read_csv(source)
-            logger.info("Station metadata loaded from %s (%d rows)", source, len(df))
-            break
+            df = pd.read_csv("https://data.ny.gov/api/views/39hk-dx4f/rows.csv?accessType=DOWNLOAD")
+            logger.info("Station metadata loaded from NY.gov (%d rows)", len(df))
         except Exception as exc:
-            logger.debug("Could not load stations from %s: %s", source, exc)
+            logger.debug("Could not load stations from NY.gov: %s", exc)
 
     if df is None:
         logger.warning("Station metadata unavailable — coordinates will be omitted")
