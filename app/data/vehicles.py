@@ -93,12 +93,23 @@ def fetch_positions(
 
             stop_id = v.stop_id
             coords = gtfs_stops.get(stop_id)
-            if coords is None:
-                continue
 
             route_norm = _normalize_route(v.trip.route_id)
+
+            # Para trenes no programados: si no hay coords en gtfs_stops, usar
+            # la posición GPS del propio entity.vehicle si está disponible.
+            # Si tampoco hay route_norm, usar el route_id tal cual (truncado).
+            if coords is None:
+                if is_unscheduled and v.HasField("position"):
+                    coords = (v.position.latitude, v.position.longitude)
+                else:
+                    continue
+
             if route_norm is None:
-                continue
+                if is_unscheduled:
+                    route_norm = v.trip.route_id.strip()[:4] or 'X'
+                else:
+                    continue
 
             lat, lon = coords
 
