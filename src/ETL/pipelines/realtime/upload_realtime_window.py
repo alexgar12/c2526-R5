@@ -18,7 +18,7 @@ import io
 import json
 import os
 from pathlib import Path
-from time import time
+import time
 
 import pandas as pd
 from dotenv import load_dotenv

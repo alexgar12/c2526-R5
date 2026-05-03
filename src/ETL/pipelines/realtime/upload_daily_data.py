@@ -32,8 +32,8 @@ from src.ETL.tiempo_real_metro.realtime_data import ( creacion_df_previsto)
 
 from src.ETL.pipelines.realtime.generate_realtime_dataset import (
     load_realtime_weather,
-    load_realtime_events,
 )
+from src.ETL.eventos.ingest_actual_eventos import ingest_eventos
 
 load_dotenv()
 
@@ -212,7 +212,7 @@ def main():
     # ── 3. Eventos ───────────────────────────────────────────────
     print("\n[3/3] Eventos...")
     try:
-        df_eventos = load_realtime_events()
+        df_eventos = ingest_eventos()
         if not df_eventos.empty:
             subir_o_sobreescribir_parquet(service, folder_eventos, "eventos_hoy.parquet", df_eventos)
         else:

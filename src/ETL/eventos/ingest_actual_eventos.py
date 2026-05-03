@@ -28,11 +28,17 @@ import requests
 from dotenv import load_dotenv
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.geocoders import Nominatim
+from zoneinfo import ZoneInfo
 
 from src.ETL.eventos.utils_eventos import (
     cargar_paradas_df,
     fusionar_lista_estaciones,
     obtener_paradas_afectadas,
+)
+
+from src.ETL.eventos.transform import (
+    _construir_tabla_correspondencias_stop_id,
+    _normalizar_paradas,
 )
 
 # ─────────────────────────────────────────────
@@ -410,32 +416,178 @@ def api_espn(df_paradas):
     return pd.DataFrame(filas)
 
 
+# ─────────────────────────────────────────────
+#  Fusión de fuentes (con tipo preservado)
+# ─────────────────────────────────────────────
+ 
+def _fusionar_eventos_con_tipo(df_seat, df_nyc, df_espn):
+    """
+    Fusiona las tres fuentes conservando la columna `tipo` de cada una,
+    necesaria para calcular tipo_referente en el cruce con GTFS.
+    """
+    dfs = []
+ 
+    if df_seat is not None and not df_seat.empty:
+        df_seat = df_seat.copy()
+        df_seat["tipo"] = "Concierto"
+        df_seat["score"] = (df_seat["popularidad_score"] + df_seat["venue_score"]) / 2
+        df_seat = df_seat.drop(
+            columns=["popularidad_score", "venue_score", "capacidad"],
+            errors="ignore",
+        )
+        dfs.append(df_seat)
+ 
+    if df_nyc is not None and not df_nyc.empty:
+        df_nyc = df_nyc.copy()
+        df_nyc["tipo"] = "Evento_Publico"
+        df_nyc["score"] = df_nyc["nivel_riesgo_tipo"] / 10
+        df_nyc = df_nyc.drop(columns=["nivel_riesgo_tipo"], errors="ignore")
+        dfs.append(df_nyc)
+ 
+    if df_espn is not None and not df_espn.empty:
+        df_espn = df_espn.copy()
+        df_espn["tipo"] = "Deporte"
+        dfs.append(df_espn)
+ 
+    if not dfs:
+        return pd.DataFrame()
+ 
+    cols_comunes = [
+        "nombre_evento", "hora_inicio", "hora_salida_estimada",
+        "score", "paradas_afectadas", "tipo",
+    ]
+    df_final = pd.concat(
+        [d[[c for c in cols_comunes if c in d.columns]] for d in dfs],
+        ignore_index=True,
+    )
+ 
+    def fusionar_grupo(grupo):
+        paradas_unidas = []
+        for p in grupo["paradas_afectadas"]:
+            if isinstance(p, list):
+                paradas_unidas.extend(p)
+        return pd.Series({
+            "hora_salida_estimada": grupo["hora_salida_estimada"].iloc[0],
+            "score":                grupo["score"].max(),
+            "paradas_afectadas":    fusionar_lista_estaciones(paradas_unidas),
+            "tipo":                 grupo.sort_values("score", ascending=False)["tipo"].iloc[0],
+        })
+ 
+    df_final = (
+        df_final
+        .groupby(["nombre_evento", "hora_inicio"], as_index=False)
+        .apply(fusionar_grupo, include_groups=False)
+        .reset_index(drop=True)
+    )
+    df_final = df_final.sort_values("score", ascending=False).reset_index(drop=True)
+    return df_final
+ 
+ 
+# ─────────────────────────────────────────────
+#  Función principal: extracción + transformación
+# ─────────────────────────────────────────────
+ 
+def ingest_eventos() -> pd.DataFrame:
+    """
+    Extrae eventos del día desde SeatGeek, NYC Open Data y ESPN,
+    aplica todas las transformaciones necesarias para el merge con GTFS
+    y devuelve el DataFrame listo para subir a Drive.
+ 
+    Esquema de salida:
+        nombre_evento, tipo, hora_inicio, hora_salida_estimada, score,
+        paradas_afectadas, stop_id, fecha_inicio, fecha_final, date,
+        parada_nombre, parada_lineas.
+    """
+    print("  [EVENTOS] Extrayendo eventos del día...")
+ 
+    df_paradas = cargar_paradas_df()
+ 
+    df_seat, df_nyc, df_espn = None, None, None
+ 
+    try:
+        df_seat = api_seatgeek(df_paradas)
+        print(f"    SeatGeek: {len(df_seat) if df_seat is not None else 0} eventos")
+    except Exception as e:
+        print(f"    SeatGeek error: {e}")
+ 
+    try:
+        df_nyc = api_nycopendata(df_paradas)
+        print(f"    NYC Open Data: {len(df_nyc) if df_nyc is not None else 0} eventos")
+    except Exception as e:
+        print(f"    NYC Open Data error: {e}")
+ 
+    try:
+        df_espn = api_espn(df_paradas)
+        print(f"    ESPN: {len(df_espn) if df_espn is not None else 0} eventos")
+    except Exception as e:
+        print(f"    ESPN error: {e}")
+ 
+    df = _fusionar_eventos_con_tipo(df_seat, df_nyc, df_espn)
+ 
+    if df.empty:
+        print("  [EVENTOS] Sin eventos hoy.")
+        return pd.DataFrame()
+ 
+    # Score default a 1.0 si falta o es NaN
+    if "score" in df.columns:
+        df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(1.0)
+    else:
+        df["score"] = 1.0
+ 
+    # Añadir columnas temporales a partir de las strings de hora y la fecha actual
+    hoy = datetime.now(tz=ZoneInfo("America/New_York")).date()
+ 
+    df["fecha_inicio"] = pd.to_datetime(
+        df["hora_inicio"].apply(lambda h: f"{hoy} {h}"),
+        errors="coerce",
+    )
+    df["fecha_final"] = pd.to_datetime(
+        df["hora_salida_estimada"].apply(lambda h: f"{hoy} {h}"),
+        errors="coerce",
+    )
+    df["date"] = hoy
+ 
+    # fecha_final con fallback a fecha_inicio
+    df["fecha_final"] = df["fecha_final"].fillna(df["fecha_inicio"])
+ 
+    # Normalizar paradas_afectadas a lista de tuplas
+    df["paradas_afectadas"] = df["paradas_afectadas"].apply(_normalizar_paradas)
+ 
+    # Descartar eventos sin ninguna parada afectada
+    df = df[df["paradas_afectadas"].map(len) > 0].copy()
+    if df.empty:
+        print("  [EVENTOS] Todas las filas sin paradas afectadas.")
+        return pd.DataFrame()
+ 
+    # Explode paradas_afectadas → una fila por parada
+    df = df.explode("paradas_afectadas", ignore_index=True)
+    df = df[df["paradas_afectadas"].notna()].copy()
+ 
+    df["parada_nombre"] = df["paradas_afectadas"].apply(
+        lambda x: x[0] if isinstance(x, (tuple, list)) and len(x) >= 1 else None
+    )
+    df["parada_lineas"] = df["paradas_afectadas"].apply(
+        lambda x: x[1] if isinstance(x, (tuple, list)) and len(x) >= 2 else None
+    )
+ 
+    # Obtener stop_id desde la tabla de correspondencias
+    print("  [EVENTOS] Construyendo tabla de correspondencias stop_id...")
+    tabla_correspondencias = _construir_tabla_correspondencias_stop_id()
+ 
+    df["stop_id"] = df["parada_nombre"].map(
+        lambda n: tabla_correspondencias.get(n, [None])
+    )
+    df = df.explode("stop_id", ignore_index=True)
+    df = df[df["stop_id"].notna()].copy()
+    df = df[df["stop_id"].str.endswith(("N", "S"), na=False)]
+    df["stop_id"] = df["stop_id"].astype("string")
+    df.drop_duplicates(subset=["nombre_evento", "stop_id"], inplace=True)
+ 
+    print(f"  [EVENTOS] {len(df)} filas listas para merge.")
+    return df
+
+
 if __name__ == "__main__":
     load_dotenv()
 
-    print("\nCargando paradas de metro...")
-    df_paradas = cargar_paradas_df()
-
-    try:
-        print("\nExtrayendo eventos de SeatGeek...")
-        df_seat_geek = api_seatgeek(df_paradas)
-        print(f"  {len(df_seat_geek)} eventos")
-        print(df_seat_geek.head())
-    except Exception as e:
-        print(f"  Error en SeatGeek: {e}")
-
-    try:
-        print("\nExtrayendo eventos de NYC Open Data...")
-        df_nyc = api_nycopendata(df_paradas)
-        print(f"  {len(df_nyc)} eventos")
-        print(df_nyc.head())
-    except Exception as e:
-        print(f"  Error en NYC Open Data: {e}")
-
-    try:
-        print("\nExtrayendo partidos ESPN...")
-        df_espn = api_espn(df_paradas)
-        print(f"  {len(df_espn)} partidos")
-        print(df_espn.head())
-    except Exception as e:
-        print(f"  Error en ESPN: {e}")
+    df = ingest_eventos()
