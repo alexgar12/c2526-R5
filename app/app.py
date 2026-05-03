@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
 
     app.state.registry = registry
     app.state.cache = TTLCache(ttl_seconds=settings.data_cache_ttl)
-    app.state.vehicles_cache = TTLCache(ttl_seconds=30)
+    app.state.vehicles_cache = TTLCache(ttl_seconds=90)
     app.state.stations_meta = _load_stations_meta()
     gtfs_static = await asyncio.to_thread(_load_gtfs_static)
     app.state.gtfs_shapes = gtfs_static["shapes"]
