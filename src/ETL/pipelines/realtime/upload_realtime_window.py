@@ -36,7 +36,7 @@ load_dotenv()
 
 # Configuración
 FOLDER_NAME = "MTA_Realtime_Windows"
-NUM_VENTANAS_A_MANTENER = 8 
+NUM_VENTANAS_A_MANTENER = 12 
 TIEMPO_VENTANA = "15"   
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
