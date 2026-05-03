@@ -69,7 +69,7 @@ FUENTES = {
     },
     "1234567S": {
         "url": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs",
-        "lineas": ["1", "2", "3", "4", "5", "6", "7", "S", "GS", "FS", "H"]
+        "lineas": ["1", "2", "3", "4", "5", "6", "7", "S"]
     },
     "SIR": {
         "url": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si",
@@ -82,52 +82,44 @@ FUENTES = {
 # Datos a DataFrame
 
 
-def _parse_feed_for_line(fuentes, linea):
-    """Convierte un FeedMessage GTFS-RT en filas para la línea dada."""
-    datos_linea = []
-    for entity in fuentes.entity:
-        if entity.HasField('trip_update'):
-            trayecto = entity.trip_update
-
-            if trayecto.trip.route_id == linea:
-                for stop in trayecto.stop_time_update:
-                    campos = {
-                        'viaje_id': trayecto.trip.trip_id,
-                        'linea_id': trayecto.trip.route_id,
-                        'parada_id': stop.stop_id,
-                        'hora_llegada': (
-                            datetime.fromtimestamp(stop.arrival.time, tz=timezone.utc)
-                            if stop.HasField('arrival') and stop.arrival.time > 0
-                            else None
-                        ),
-                        'hora_partida': (
-                            datetime.fromtimestamp(stop.departure.time, tz=timezone.utc)
-                            if stop.HasField('departure') and stop.departure.time > 0
-                            else None
-                        ),
-                        'timestamp': datetime.now(tz=timezone.utc),
-                    }
-                    datos_linea.append(campos)
-    return datos_linea
-
-
-def extraccion_linea(url, linea, reintentos=3, feed=None):
-    """Extrae los datos de una línea.
-
-    Si `feed` (FeedMessage ya parseado) se pasa, se usa directamente y no se
-    descarga; permite compartir el mismo snapshot entre /api/vehicles y la
-    inferencia per-train para evitar desfase temporal.
+def extraccion_linea(url, linea, reintentos=3):
     """
-    if feed is not None:
-        return _parse_feed_for_line(feed, linea)
+    Extrae los datos de una línea
+    """
 
     for intento in range(reintentos):
         try:
             response = requests.get(url, timeout = 10)
             fuentes = gtfs_realtime_pb2.FeedMessage()
             fuentes.ParseFromString(response.content)
-            return _parse_feed_for_line(fuentes, linea)
 
+            datos_linea = []
+            for entity in fuentes.entity:
+                if entity.HasField('trip_update'):
+                    trayecto = entity.trip_update
+
+                    if trayecto.trip.route_id == linea:
+                        for stop in trayecto.stop_time_update:
+                            campos = {
+                                'viaje_id': trayecto.trip.trip_id,
+                                'linea_id': trayecto.trip.route_id,
+                                'parada_id': stop.stop_id,
+                                'hora_llegada': (
+                                    datetime.fromtimestamp(stop.arrival.time, tz=timezone.utc)
+                                    if stop.HasField('arrival') and stop.arrival.time > 0
+                                    else None
+                                ),
+                                'hora_partida': (
+                                    datetime.fromtimestamp(stop.departure.time, tz=timezone.utc)
+                                    if stop.HasField('departure') and stop.departure.time > 0
+                                    else None
+                                ),
+                                'timestamp': datetime.now(tz=timezone.utc),
+                            }
+
+                            datos_linea.append(campos)
+            return datos_linea
+        
         except Exception as e:
             if intento == reintentos - 1:
                 print(f"  [ERROR] Línea {linea} fallida tras {reintentos} intentos: {e}")
@@ -144,22 +136,10 @@ def extraccion_datos():
     """
     todos_los_datos = []
 
-    # Reutilizamos un único FeedMessage por feed (descarga una sola vez por URL)
-    # y, además, alimentamos la caché compartida con /api/vehicles para que
-    # cualquier predicción posterior opere sobre el mismo snapshot.
-    try:
-        from app.data.gtfs_rt_cache import get_feed_message
-    except Exception:
-        get_feed_message = None
-
     for grupo, info in FUENTES.items():
         url = info['url']
-        feed = get_feed_message(url) if get_feed_message is not None else None
         for linea in info['lineas']:
-            if feed is not None:
-                todos_los_datos.extend(extraccion_linea(url, linea, feed=feed))
-            else:
-                todos_los_datos.extend(extraccion_linea(url, linea))
+            todos_los_datos.extend(extraccion_linea(url, linea))
 
     return pd.DataFrame(todos_los_datos)
 

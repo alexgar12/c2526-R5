@@ -47,7 +47,6 @@ from src.ETL.tiempo_real_metro.realtime_data import (
     union_dataframes,
 )
 from app.data.drive import download_daily_file
-from app.data.gtfs_rt_cache import get_feed_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -247,82 +246,23 @@ def _load_events_drive() -> pd.DataFrame:
 
 # ── GTFS-RT para una línea concreta ─────────────────────────────────────────
 
-_VALID_ROUTES = {
-    '1', '2', '3', '4', '5', '6', '7',
-    'A', 'C', 'E', 'B', 'D', 'F', 'M',
-    'G', 'J', 'Z', 'L', 'N', 'Q', 'R', 'W',
-    'S', 'GS', 'FS', 'H', 'SIR',
-}
-
-
-def _normalize_route_for_feed(rid: str) -> str | None:
-    """Normaliza un route_id (crudo del trip_id o del feed) al canónico usado en FUENTES.
-
-    Mantiene paridad con app/data/vehicles.py::_normalize_route para que los
-    trains mostrados en el mapa puedan resolverse por la API de predicción.
-    """
-    if not rid:
-        return None
-    rid = rid.strip()
-    if rid in _VALID_ROUTES:
-        return rid
-    base = rid.split('-')[0].split('_')[0]
-    if base in _VALID_ROUTES:
-        return base
-    if base == 'SI':
-        return 'SIR'
-    return None
-
-
 def _route_id_from_trip(trip_id: str) -> str:
-    """Extrae route_id del trip_id GTFS-RT MTA.
-
-    Formato típico: '033150_2..N08R' → '2'. Para trip_ids con prefijo extra
-    (p. ej. 'AFA23GEN-1037-Sunday-00_135700_5X..N06R'), se prueba cada token
-    separado por '_' y se devuelve el primero cuyo prefijo (antes del '.')
-    normalice a una ruta válida. Si nada encaja, se devuelve el segundo token
-    (comportamiento histórico).
-    """
-    tokens = trip_id.split("_")
-    for tok in tokens[1:]:
-        candidate = tok.split(".")[0]
-        if _normalize_route_for_feed(candidate) is not None:
-            return candidate
-    # Fallback al comportamiento histórico
-    if len(tokens) >= 2:
-        return tokens[1].split(".")[0]
-    return trip_id
+    """Extrae route_id del trip_id: '033150_2..N08R' → '2'."""
+    return trip_id.split("_")[1].split(".")[0]
 
 
 def _load_gtfs_rt_line(route_id: str) -> pd.DataFrame:
-    """Llama solo al endpoint GTFS-RT de la línea dada.
-
-    Acepta route_id tanto crudo (lo que aparezca en el trip_id) como normalizado
-    (p. ej. 'SI' o 'SIR'). Internamente busca por ambas variantes en FUENTES y
-    pasa al filtro interno de extraccion_linea la cadena cruda esperada por el
-    feed.
-    """
-    normalized = _normalize_route_for_feed(route_id) or route_id
-    candidates = {route_id.upper(), normalized.upper()}
-
+    """Llama solo al endpoint GTFS-RT de la línea dada."""
     url = None
     for info in FUENTES.values():
-        feed_lines_upper = [l.upper() for l in info["lineas"]]
-        if any(c in feed_lines_upper for c in candidates):
+        if route_id.upper() in [l.upper() for l in info["lineas"]]:
             url = info["url"]
             break
     if url is None:
         raise ValueError(f"route_id '{route_id}' no encontrado en FUENTES")
 
-    # Usa el snapshot compartido con /api/vehicles (TTL 30s); si no hay snapshot
-    # cacheado, la propia caché lo descarga. Esto garantiza que cualquier trip
-    # visible en el mapa esté también en este feed.
-    log.info("  [GTFS RT] Snapshot compartido para línea %s...", route_id)
-    feed = get_feed_message(url)
-    datos = extraccion_linea(url, route_id, feed=feed) if feed is not None else extraccion_linea(url, route_id)
-    if not datos and normalized != route_id:
-        log.info("  [GTFS RT] Sin datos con '%s', reintentando con '%s'...", route_id, normalized)
-        datos = extraccion_linea(url, normalized, feed=feed) if feed is not None else extraccion_linea(url, normalized)
+    log.info("  [GTFS RT] Llamando endpoint para línea %s...", route_id)
+    datos = extraccion_linea(url, route_id)
     df = pd.DataFrame(datos)
     if df.empty:
         raise ValueError(f"Sin datos RT para la línea {route_id}")
@@ -503,46 +443,4 @@ def get_single_trip_features(trip_id: str) -> dict | None:
 def get_trip_features(match_key: str) -> dict | None:
     """Genera las features de un trip listas para predecir (encoding de categóricas en el caller)."""
     return get_single_trip_features(match_key)
-
-
-def check_trip_predictable(trip_id: str) -> tuple[str, str]:
-    """Inspecciona el snapshot GTFS-RT cacheado para clasificar un trip antes
-    de lanzar el pipeline de features.
-
-    Returns: (status, message)
-      status ∈ {"ok", "unscheduled", "not_found"}
-    """
-    route_id = _route_id_from_trip(trip_id)
-    normalized = _normalize_route_for_feed(route_id) or route_id
-
-    url = None
-    for info in FUENTES.values():
-        feed_lines_upper = [l.upper() for l in info["lineas"]]
-        if route_id.upper() in feed_lines_upper or normalized.upper() in feed_lines_upper:
-            url = info["url"]
-            break
-    if url is None:
-        return ("not_found", f"route '{route_id}' no resoluble a ningún feed")
-
-    feed = get_feed_message(url)
-    if feed is None:
-        return ("not_found", "feed GTFS-RT no disponible ahora mismo")
-
-    found_unscheduled = False
-    for entity in feed.entity:
-        # Comprobar tanto trip_update como vehicle: ambos llevan trip.trip_id
-        for has, getter in (("trip_update", lambda e: e.trip_update),
-                            ("vehicle",     lambda e: e.vehicle)):
-            if not entity.HasField(has):
-                continue
-            t = getter(entity).trip
-            if t.trip_id != trip_id:
-                continue
-            if t.schedule_relationship != 0:
-                found_unscheduled = True
-                continue
-            return ("ok", "")
-    if found_unscheduled:
-        return ("unscheduled", "tren no programado (unscheduled): no se puede predecir")
-    return ("not_found", "trip no presente en el feed actual")
 

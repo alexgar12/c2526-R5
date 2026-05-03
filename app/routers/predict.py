@@ -10,10 +10,7 @@ from app.data.drive import download_windows
 from app.models.alertas_infer import run_alerts
 from app.models.delay_infer import run_delays, run_delay_single
 from app.models.delta_infer import run_delta, run_delta_single
-from src.ETL.pipelines.realtime.preprocess_realtime_lgbm import (
-    get_trip_features,
-    check_trip_predictable,
-)
+from src.ETL.pipelines.realtime.preprocess_realtime_lgbm import get_trip_features
 from app.models.dcrnn_infer import run_propagation
 from app.schemas import (
     AlertResponse,
@@ -288,34 +285,9 @@ async def predict_train(
     """
     registry = request.app.state.registry
 
-    # Filtro temprano: si el trip es unscheduled o no aparece en el feed actual,
-    # respondemos 200 con un mensaje claro para que el frontend nunca vea 404.
-    status, msg = await asyncio.to_thread(check_trip_predictable, match_key)
-    if status == "unscheduled":
-        return {
-            "match_key":   match_key,
-            "predictable": False,
-            "reason":      "unscheduled",
-            "message":     msg,
-        }
-    if status == "not_found":
-        return {
-            "match_key":   match_key,
-            "predictable": False,
-            "reason":      "not_found",
-            "message":     msg,
-        }
-
     features = await asyncio.to_thread(get_trip_features, match_key)
     if features is None:
-        # Trip presente al hacer el check pero perdido entre el check y el pipeline
-        # (TTL caducó y nuevo snapshot ya no lo trae). Tratado como no predecible.
-        return {
-            "match_key":   match_key,
-            "predictable": False,
-            "reason":      "not_found",
-            "message":     "trip dejó de estar en el feed durante la inferencia",
-        }
+        raise HTTPException(404, detail=f"match_key '{match_key}' no encontrado en el feed RT")
 
     current_delay_s       = float(features.get("delay_seconds", 0.0))
     stops_to_end          = int(features.get("stops_to_end", 0))
