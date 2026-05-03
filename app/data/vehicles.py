@@ -1,5 +1,6 @@
 """Real-time train positions from MTA GTFS-RT feeds."""
 import logging
+import time
 
 import requests
 from google.transit import gtfs_realtime_pb2
@@ -64,11 +65,28 @@ def fetch_positions(
             logger.warning("Feed %s unavailable: %s", feed_key, exc)
             continue
 
+        # Trips that have at least one stop already in the past
+        now_ts = int(time.time())
+        started_trips: set[str] = set()
+        for entity in msg.entity:
+            if not entity.HasField("trip_update"):
+                continue
+            tu = entity.trip_update
+            for stu in tu.stop_time_update:
+                arrival = stu.arrival.time if stu.HasField("arrival") else 0
+                departure = stu.departure.time if stu.HasField("departure") else 0
+                t = arrival or departure
+                if t and t <= now_ts:
+                    started_trips.add(tu.trip.trip_id)
+                    break
+
         for entity in msg.entity:
             if not entity.HasField("vehicle"):
                 continue
             v = entity.vehicle
             if not v.trip.trip_id or not v.stop_id:
+                continue
+            if v.trip.trip_id not in started_trips:
                 continue
 
             stop_id = v.stop_id

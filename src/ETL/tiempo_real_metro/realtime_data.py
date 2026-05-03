@@ -26,6 +26,7 @@ OUTPUT:
 """
 
 
+import re
 import requests
 from datetime import datetime, timezone
 import pandas as pd
@@ -302,7 +303,7 @@ def creacion_df_previsto():
     Creación de dataframe de horarios previstos
     """
 
-    url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
+    url = "e"
 
     with urllib.request.urlopen(url) as response:
         zip_data = io.BytesIO(response.read())
@@ -428,6 +429,17 @@ def calcular_features_rt(df, df_schedule=None):
     df['scheduled_time_to_end'] = df['final_secs'] - df['segundos_previstos']
     df = df.drop(columns=['max_seq', 'final_secs'])
 
+    # Cuando el join con stop_times falla (trip_id no está en el schedule),
+    # stops_to_end y scheduled_time_to_end quedan NaN. Usar los valores calculados
+    # directamente del feed RT como fallback.
+    if 'stops_to_end_rt' in df.columns:
+        mask = df['stops_to_end'].isna()
+        df.loc[mask, 'stops_to_end'] = df.loc[mask, 'stops_to_end_rt']
+    if 'scheduled_time_to_end_rt' in df.columns:
+        mask_t = df['scheduled_time_to_end'].isna()
+        df.loc[mask_t, 'scheduled_time_to_end'] = df.loc[mask_t, 'scheduled_time_to_end_rt']
+    df = df.drop(columns=['stops_to_end_rt', 'scheduled_time_to_end_rt'], errors='ignore')
+
     return df
 
 
@@ -442,9 +454,20 @@ def union_dataframes(df1, df2):
     # La clave de join es (viaje_id, parada_id). No se usa 'dia'/'day' porque el
     # campo 'day' del GTFS suplementado contiene IDs de calendario arbitrarios
     # además de 'Weekday'/'Saturday'/'Sunday', lo que destruye el 89% de los matches.
-    df = pd.merge(df1, df2, left_on=['viaje_id', 'parada_id'],
-              right_on=['trip_id', 'stop_id'],
+    #
+    # Normalización del trip_id: el feed RT a veces omite el sufijo de shape
+    # (ej. 'C..N' en vez de 'C..N04R'). Se elimina ese sufijo en ambos lados
+    # para garantizar el match.
+    _shape_re = re.compile(r'(?<=[NS])\d+\w*$')
+    df1 = df1.copy()
+    df1['_norm_viaje'] = df1['viaje_id'].str.replace(_shape_re, '', regex=True)
+    df2 = df2.copy()
+    df2['_norm_trip'] = df2['trip_id'].str.replace(_shape_re, '', regex=True)
+
+    df = pd.merge(df1, df2, left_on=['_norm_viaje', 'parada_id'],
+              right_on=['_norm_trip', 'stop_id'],
               how='left')
+    df = df.drop(columns=['_norm_viaje', '_norm_trip'], errors='ignore')
 
     # Marcar trenes no programados: no encontraron match en el schedule
     df['is_unscheduled'] = df['trip_id'].isna()

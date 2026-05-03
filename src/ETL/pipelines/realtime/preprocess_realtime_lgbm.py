@@ -251,18 +251,27 @@ def _route_id_from_trip(trip_id: str) -> str:
     return trip_id.split("_")[1].split(".")[0]
 
 
+# Algunos trip_ids usan un route_id que difiere del route_id en el feed RT.
+# Por ejemplo, SIR trips tienen 'SI' en el trip_id pero 'SIR' en el feed.
+_RT_ROUTE_ALIAS: dict[str, str] = {
+    "SI": "SIR",
+}
+
+
 def _load_gtfs_rt_line(route_id: str) -> pd.DataFrame:
     """Llama solo al endpoint GTFS-RT de la línea dada."""
+    rt_route_id = _RT_ROUTE_ALIAS.get(route_id, route_id)
+
     url = None
     for info in FUENTES.values():
-        if route_id.upper() in [l.upper() for l in info["lineas"]]:
+        if rt_route_id.upper() in [l.upper() for l in info["lineas"]]:
             url = info["url"]
             break
     if url is None:
         raise ValueError(f"route_id '{route_id}' no encontrado en FUENTES")
 
-    log.info("  [GTFS RT] Llamando endpoint para línea %s...", route_id)
-    datos = extraccion_linea(url, route_id)
+    log.info("  [GTFS RT] Llamando endpoint para línea %s...", rt_route_id)
+    datos = extraccion_linea(url, rt_route_id)
     df = pd.DataFrame(datos)
     if df.empty:
         raise ValueError(f"Sin datos RT para la línea {route_id}")
@@ -276,6 +285,20 @@ def _load_gtfs_rt_line(route_id: str) -> pd.DataFrame:
         + df["hora_llegada"].dt.minute * 60
         + df["hora_llegada"].dt.second
     )
+
+    # Fallback de stops_to_end y scheduled_time_to_end desde el propio feed RT,
+    # usado cuando el trip_id no está en stop_times.parquet y el join falla.
+    # El feed RT contiene solo las paradas restantes del viaje, ordenadas por hora_llegada.
+    df = df.sort_values(["viaje_id", "hora_llegada"])
+    df["_rt_rank"]    = df.groupby("viaje_id").cumcount()
+    df["_rt_total"]   = df.groupby("viaje_id")["parada_id"].transform("count")
+    df["_rt_last_ha"] = df.groupby("viaje_id")["hora_llegada"].transform("last")
+    df["stops_to_end_rt"] = (df["_rt_total"] - df["_rt_rank"] - 1).astype(int)
+    df["scheduled_time_to_end_rt"] = (
+        df["_rt_last_ha"] - df["hora_llegada"]
+    ).dt.total_seconds()
+    df = df.drop(columns=["_rt_rank", "_rt_total", "_rt_last_ha"])
+
     log.info("  [GTFS RT] %d filas para línea %s.", len(df), route_id)
     return df
 
