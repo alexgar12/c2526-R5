@@ -86,7 +86,9 @@ def fetch_positions(
             v = entity.vehicle
             if not v.trip.trip_id or not v.stop_id:
                 continue
-            if v.trip.trip_id not in started_trips:
+            # ADDED trips (schedule_relationship==1) may have no trip_update
+            is_added = v.trip.schedule_relationship == 1
+            if not is_added and v.trip.trip_id not in started_trips:
                 continue
 
             stop_id = v.stop_id
