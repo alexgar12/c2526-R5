@@ -346,7 +346,7 @@ function drawShapeLines(shapesData) {
         redrawShapes();
     });
     
-    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas con offsets de píxeles.`);
+    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas con offsets geográficos fijos.`);
 }
 
 
