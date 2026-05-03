@@ -26,6 +26,7 @@ OUTPUT:
 """
 
 
+import re
 import requests
 from datetime import datetime, timezone
 import pandas as pd
@@ -301,7 +302,7 @@ def creacion_df_previsto():
     Creación de dataframe de horarios previstos
     """
 
-    url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
+    url = "e"
 
     with urllib.request.urlopen(url) as response:
         total_size = response.headers.get("Content-Length")
@@ -437,6 +438,17 @@ def calcular_features_rt(df, df_schedule=None):
     df['stops_to_end'] = df['max_seq'] - df['stop_sequence']
     df['scheduled_time_to_end'] = df['final_secs'] - df['segundos_previstos']
     df = df.drop(columns=['max_seq', 'final_secs'])
+
+    # Cuando el join con stop_times falla (trip_id no está en el schedule),
+    # stops_to_end y scheduled_time_to_end quedan NaN. Usar los valores calculados
+    # directamente del feed RT como fallback.
+    if 'stops_to_end_rt' in df.columns:
+        mask = df['stops_to_end'].isna()
+        df.loc[mask, 'stops_to_end'] = df.loc[mask, 'stops_to_end_rt']
+    if 'scheduled_time_to_end_rt' in df.columns:
+        mask_t = df['scheduled_time_to_end'].isna()
+        df.loc[mask_t, 'scheduled_time_to_end'] = df.loc[mask_t, 'scheduled_time_to_end_rt']
+    df = df.drop(columns=['stops_to_end_rt', 'scheduled_time_to_end_rt'], errors='ignore')
 
     return df
 
