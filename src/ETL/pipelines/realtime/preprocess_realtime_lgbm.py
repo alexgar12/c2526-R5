@@ -19,6 +19,7 @@ Uso standalone (un único trip):
 import gc
 import os
 import logging
+import re
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -429,7 +430,12 @@ def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
         log.warning("  %s", e)
         return None, str(e)
 
-    if df_real[df_real["viaje_id"] == trip_id].empty:
+    # Normalizar shape suffix: entity.vehicle puede usar 'C..N' mientras
+    # entity.trip_update usa 'C..N04R'. Comparamos con ambas formas.
+    _shape_re = re.compile(r'(?<=[NS])\d+\w*$')
+    trip_id_norm = _shape_re.sub('', trip_id)
+    df_real_norm = df_real["viaje_id"].str.replace(_shape_re, '', regex=True)
+    if not (df_real_norm == trip_id_norm).any():
         msg = f"trip_id '{trip_id}' no encontrado en el feed RT de la línea '{route_id}' ({len(df_real)} trips en el feed)"
         log.warning("  %s", msg)
         return None, msg
@@ -448,7 +454,9 @@ def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
 
     df_collapsed = _add_line_features(df_collapsed)
 
-    df = df_collapsed[df_collapsed["match_key"] == trip_id].copy()
+    # match_key en df_collapsed puede tener shape suffix distinto al trip_id recibido
+    match_key_norm = df_collapsed["match_key"].str.replace(_shape_re, '', regex=True)
+    df = df_collapsed[match_key_norm == trip_id_norm].copy()
     if df.empty:
         msg = f"trip_id '{trip_id}' presente en el feed pero sin paradas restantes (stops_to_end=0, posiblemente finalizando recorrido)"
         log.warning("  %s", msg)
