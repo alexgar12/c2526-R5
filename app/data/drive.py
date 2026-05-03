@@ -34,16 +34,10 @@ _DEFAULT_TOKEN_PATH = (
 
 
 def _get_service(token_path: Path) -> object:
-    # GitHub Actions / production: reconstruct token from env var
-    token_json = os.getenv("GDRIVE_TOKEN_JSON")
-    if token_json:
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(token_json)
-
     if not token_path.exists():
         raise FileNotFoundError(
             f"token_drive.json not found at {token_path}. "
-            "Run the OAuth flow locally once to generate it, or set GDRIVE_TOKEN_JSON."
+            "Run the OAuth flow locally once to generate it, or mount the file into the container."
         )
 
     creds = Credentials.from_authorized_user_file(str(token_path), _SCOPES)

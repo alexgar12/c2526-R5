@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./src/ETL/alertas_oficiales_tiempo_real/token_drive.json:/app/src/ETL/alertas_oficiales_tiempo_real/token_drive.json
