@@ -59,10 +59,14 @@ RUTA_GRAFO    = Path(__file__).parent / "artefactos" / "grafo.pt"
 RUTA_ABLACION = Path(__file__).parent / "artefactos" / "ablacion.pt"
 RUTA_SALIDA   = Path(__file__).parent / "artefactos" / "hpo.pt"
 
-N_TRIALS_RANDOM = 10
-N_TRIALS_OPTUNA = 8
-MAX_EPOCHS      = 20
-ES_PATIENCE     = 7
+N_TRIALS_RANDOM = 8
+N_TRIALS_OPTUNA = 7
+MAX_EPOCHS      = 10
+ES_PATIENCE     = 5
+# Limitar train Y val para HPO — la validación completa (1133 timesteps) consume
+# tanto como entrenar y haría inviable el HPO (>70 h con 40 trials).
+MAX_T_HPO       = 1000
+MAX_T_VAL_HPO   = 400
 OUT_HORIZONS    = 3
 
 ESPACIO_HP = {
@@ -70,7 +74,7 @@ ESPACIO_HP = {
     'K':                  [2, 3],
     'dropout':            (0.0, 0.4),
     'lr':                 (1e-4, 3e-3),
-    'batch_size':         [8, 16],
+    'batch_size':         [16],
     'history_len':        [4, 8, 12],
     'grad_clip':          [1.0, 3.0, 5.0],
     'scheduler_patience': [2, 3, 4],
@@ -135,6 +139,11 @@ def train_trial(
     )
     crit = torch.nn.L1Loss()
 
+    # Validar consistencia una sola vez antes del bucle (evita GPU-CPU sync en cada batch)
+    xb0, yb0 = next(iter(tr_ld))
+    validar_batch_vs_grafo(xb0.to(device), yb0.to(device), edge_index, edge_weight, tag="hpo")
+    del xb0, yb0
+
     best_val = float('inf')
     no_imp   = 0
     pruned   = False
@@ -144,7 +153,6 @@ def train_trial(
         modelo.train()
         for xb, yb in tr_ld:
             xb, yb = xb.to(device), yb.to(device)
-            validar_batch_vs_grafo(xb, yb, edge_index, edge_weight, tag="hpo-train")
             opt.zero_grad()
             loss = crit(modelo(xb, edge_index, edge_weight), yb)
             loss.backward()
@@ -228,7 +236,7 @@ def fase_optuna(feature_set, X_train, Y_train, X_val, Y_val, edge_index, edge_we
             'K':                  trial.suggest_categorical('K', [2, 3]),
             'dropout':            trial.suggest_float('dropout', 0.0, 0.4),
             'lr':                 trial.suggest_float('lr', 1e-4, 3e-3, log=True),
-            'batch_size':         trial.suggest_categorical('batch_size', [8, 16]),
+            'batch_size':         trial.suggest_categorical('batch_size', [16]),
             'history_len':        trial.suggest_categorical('history_len', [4, 8, 12]),
             'grad_clip':          trial.suggest_categorical('grad_clip', [1.0, 3.0, 5.0]),
             'scheduler_patience': trial.suggest_categorical('scheduler_patience', [2, 3, 4]),
@@ -333,10 +341,11 @@ def main():
     print(f"Device: {device}")
 
     datos       = torch.load(RUTA_TENSORES, weights_only=False)
-    X_train     = datos['X_train']
-    Y_train     = datos['Y_train']
-    X_val       = datos['X_val']
-    Y_val       = datos['Y_val']
+    X_train     = datos['X_train'][:MAX_T_HPO]
+    Y_train     = datos['Y_train'][:MAX_T_HPO]
+    X_val       = datos['X_val'][:MAX_T_VAL_HPO]
+    Y_val       = datos['Y_val'][:MAX_T_VAL_HPO]
+    print(f"T_train (HPO): {len(X_train)} | T_val: {len(X_val)}")
 
     grafo       = torch.load(RUTA_GRAFO, weights_only=False)
     edge_index  = grafo['edge_index'].to(device)
