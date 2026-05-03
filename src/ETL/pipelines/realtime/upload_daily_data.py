@@ -51,13 +51,11 @@ TOKEN_PATH = BASE_DIR / "token_drive.json"
 # ── Cliente de Google Drive ──────────────────────────────────────
 
 def get_drive_service():
-    token_json_content = os.getenv("GDRIVE_TOKEN_JSON")
-    if token_json_content:
-        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_PATH.write_text(token_json_content)
-
     if not TOKEN_PATH.exists():
-        raise RuntimeError("token_drive.json no encontrado.")
+        raise RuntimeError(
+            "token_drive.json no encontrado. "
+            "Ejecuta generar_token_drive.py localmente para generarlo, o monta el archivo en el contenedor."
+        )
 
     creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
     if not creds.valid and creds.expired and creds.refresh_token:
