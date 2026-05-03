@@ -59,6 +59,10 @@ PARAMS_BASE = {
 }
 MAX_EPOCHS_ABLACION = 15
 ES_PATIENCE         = 7
+# Limitar muestras de entrenamiento para ablación: solo necesitamos ranking relativo,
+# no convergencia completa. El entrenamiento final (09) usa el dataset completo.
+MAX_T_ABLACION      = 1000
+MAX_T_VAL_ABLACION  = 400   # limitar también la validación (sino domina el coste por época)
 OUT_HORIZONS        = 3
 
 ALL_IDX = list(range(14))
@@ -115,6 +119,11 @@ def entrenar_subset(
     )
     crit = torch.nn.L1Loss()
 
+    # Validar consistencia una sola vez antes del bucle (evita GPU-CPU sync en cada batch)
+    xb0, yb0 = next(iter(tr_ld))
+    validar_batch_vs_grafo(xb0.to(device), yb0.to(device), edge_index, edge_weight, tag="ablacion")
+    del xb0, yb0
+
     best_val = float('inf')
     no_imp   = 0
     t0       = time.time()
@@ -123,7 +132,6 @@ def entrenar_subset(
         modelo.train()
         for xb, yb in tr_ld:
             xb, yb = xb.to(device), yb.to(device)
-            validar_batch_vs_grafo(xb, yb, edge_index, edge_weight, tag="ablacion-train")
             opt.zero_grad()
             loss = crit(modelo(xb, edge_index, edge_weight), yb)
             loss.backward()
@@ -165,10 +173,11 @@ def main():
     print(f"Device: {device}")
 
     datos     = torch.load(RUTA_TENSORES, weights_only=False)
-    X_train   = datos['X_train']
-    Y_train   = datos['Y_train']
-    X_val     = datos['X_val']
-    Y_val     = datos['Y_val']
+    X_train   = datos['X_train'][:MAX_T_ABLACION]
+    Y_train   = datos['Y_train'][:MAX_T_ABLACION]
+    X_val     = datos['X_val'][:MAX_T_VAL_ABLACION]
+    Y_val     = datos['Y_val'][:MAX_T_VAL_ABLACION]
+    print(f"T_train (ablación): {len(X_train)} | T_val: {len(X_val)}")
 
     grafo        = torch.load(RUTA_GRAFO, weights_only=False)
     edge_index   = grafo['edge_index'].to(device)

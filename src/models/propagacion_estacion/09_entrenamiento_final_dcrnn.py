@@ -54,7 +54,7 @@ RUTA_MODELO   = Path(__file__).parent / "artefactos" / "dcrnn_final.pth"
 WANDB_PROJECT  = "pd1-c2526-team5"
 WANDB_RUN_NAME = "dcrnn-final-trainval"
 
-NUM_EPOCHS   = 50
+NUM_EPOCHS   = 30
 OUT_HORIZONS = 3
 SEED         = 42
 
@@ -172,12 +172,16 @@ def main():
     best_state = None
     t0         = time.time()
 
+    # Validar consistencia una sola vez antes del bucle de entrenamiento
+    xb0, yb0 = next(iter(tv_ld))
+    validar_batch_vs_grafo(xb0.to(device), yb0.to(device), edge_index, edge_weight, tag="trainval")
+    del xb0, yb0
+
     for epoch in range(1, NUM_EPOCHS + 1):
         modelo.train()
         acc_loss = 0.0
         for xb, yb in tv_ld:
             xb, yb = xb.to(device), yb.to(device)
-            validar_batch_vs_grafo(xb, yb, edge_index, edge_weight, tag="trainval")
             opt.zero_grad()
             loss = crit(modelo(xb, edge_index, edge_weight), yb)
             loss.backward()
