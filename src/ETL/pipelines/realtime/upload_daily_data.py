@@ -44,7 +44,10 @@ FOLDER_CLIMA  = "clima"
 FOLDER_EVENTOS = "eventos"
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-BASE_DIR = Path(__file__).resolve().parent.parent / "alertas_oficiales_tiempo_real"
+BASE_DIR = Path(__file__).resolve()
+while BASE_DIR.name != "c2526-R5":
+    BASE_DIR = BASE_DIR.parent
+BASE_DIR = BASE_DIR / "src" / "ETL" / "alertas_oficiales_tiempo_real"
 TOKEN_PATH = BASE_DIR / "token_drive.json"
 
 
