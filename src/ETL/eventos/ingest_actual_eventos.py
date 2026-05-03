@@ -121,7 +121,7 @@ def api_seatgeek(df_paradas):
             continue
         eventos_limpios.append({
             'nombre_evento':     e.get('title'),
-            'tipo':              e.get('type'),
+            'tipo':              'concert',
             'hora_inicio':       e.get('datetime_local'),
             'lugar':             e['venue'].get('name'),
             'direccion':         e['venue'].get('address', 'Dirección no disponible'),
