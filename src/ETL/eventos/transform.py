@@ -18,7 +18,6 @@ from datetime import date, timedelta
 IDS = ["eventos", "eventos_deporte", "eventos_concierto"]
 
 _MTA_GTFS_ZIP_URL = "http://web.mta.info/developers/data/nyct/subway/google_transit.zip"
-_METRO_CSV_URL    = "https://data.ny.gov/api/views/39hk-dx4f/rows.csv?accessType=DOWNLOAD"
 
 
 def _descargar_stops_gtfs() -> pd.DataFrame:
@@ -34,6 +33,67 @@ def _descargar_stops_gtfs() -> pd.DataFrame:
     return df[["stop_id", "stop_name", "stop_lat", "stop_lon"]].copy()
 
 
+def _descargar_metro_csv_drive() -> pd.DataFrame:
+    """Descarga MTA_Subway_Stations.csv desde Drive (MTA_Daily_Data/GTFS_estatic/)."""
+    from pathlib import Path
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+
+    token_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "ETL" / "alertas_oficiales_tiempo_real" / "token_drive.json"
+    )
+    token_json = os.getenv("GDRIVE_TOKEN_JSON")
+    if token_json:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(token_json)
+
+    creds = Credentials.from_authorized_user_file(
+        str(token_path), ["https://www.googleapis.com/auth/drive"]
+    )
+    if not creds.valid and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        token_path.write_text(creds.to_json())
+
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    def _folder_id(name, parent=None):
+        q = (
+            f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder'"
+            f" and trashed = false"
+        )
+        if parent:
+            q += f" and '{parent}' in parents"
+        res = service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+        if not files:
+            raise FileNotFoundError(f"Carpeta Drive '{name}' no encontrada")
+        return files[0]["id"]
+
+    root_id = _folder_id("MTA_Daily_Data")
+    folder_id = _folder_id("GTFS_estatic", parent=root_id)
+
+    res = service.files().list(
+        q=f"'{folder_id}' in parents and name = 'MTA_Subway_Stations.csv' and trashed = false",
+        fields="files(id)",
+        pageSize=1,
+    ).execute()
+    files = res.get("files", [])
+    if not files:
+        raise FileNotFoundError("MTA_Subway_Stations.csv no encontrado en Drive/GTFS_estatic")
+
+    req = service.files().get_media(fileId=files[0]["id"])
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    buf.seek(0)
+    return pd.read_csv(buf)
+
+
 def _construir_tabla_correspondencias_stop_id() -> dict:
     """
     Construye un diccionario  parada_nombre → [stop_id, ...]  combinando:
@@ -42,7 +102,7 @@ def _construir_tabla_correspondencias_stop_id() -> dict:
          que no se hayan juntado por nomnre
     """
     df_paradas_gtfs = _descargar_stops_gtfs()
-    df_paradas_nyc  = pd.read_csv(_METRO_CSV_URL)
+    df_paradas_nyc  = _descargar_metro_csv_drive()
 
     df_paradas_gtfs["nombre_normalizado"] = df_paradas_gtfs["stop_name"].str.lower().str.strip()
     df_paradas_nyc["nombre_normalizado"]  = df_paradas_nyc["Stop Name"].str.lower().str.strip()

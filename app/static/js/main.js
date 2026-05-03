@@ -540,6 +540,8 @@ async function openTrainPopup(train, marker) {
     let bodyContent;
     if (!data) {
         bodyContent = `<div class="train-unscheduled">No se pudo obtener predicción</div>`;
+    } else if (data.predictable === false) {
+        bodyContent = `<div class="train-unscheduled">${data.reason || 'Predicción no disponible'}</div>`;
     } else {
         const curDelay = data.current_delay_s;
         const stopsLeft = data.stops_to_end;

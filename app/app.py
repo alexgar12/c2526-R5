@@ -120,14 +120,6 @@ def _load_stations_meta() -> dict:
     except Exception as exc:
         logger.warning("Drive stations not available: %s", exc)
 
-    # 2) NY.gov (último recurso)
-    if df is None:
-        try:
-            df = pd.read_csv("https://data.ny.gov/api/views/39hk-dx4f/rows.csv?accessType=DOWNLOAD")
-            logger.info("Station metadata loaded from NY.gov (%d rows)", len(df))
-        except Exception as exc:
-            logger.debug("Could not load stations from NY.gov: %s", exc)
-
     if df is None:
         logger.warning("Station metadata unavailable — coordinates will be omitted")
         return {}

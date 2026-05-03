@@ -385,31 +385,34 @@ def update_lag_state() -> None:
     log.info("Estado de lags actualizado: %d trips.", len(df))
 
 
-def get_single_trip_features(trip_id: str) -> dict | None:
+def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
     """
     Genera las features completas para un único trip_id en el momento de la petición.
 
-    Flujo:
-      1. GTFS-RT de la línea → parada más inminente del trip (posición actual)
-      2. Lags desde MinIO   → lag1/lag2 ya calculados por el worker
-      3. Clima / Eventos    → Drive (con caché RAM)
-      4. Alertas            → Gmail
-      5. Features derivadas → delay_velocity, delay_acceleration, etc.
+    Returns: (features_dict, error_reason)
+      - Si ok: (dict, "")
+      - Si falla: (None, "motivo legible")
     """
     log.info("=== SINGLE TRIP: %s ===", trip_id)
 
-    route_id    = _route_id_from_trip(trip_id)
+    route_id = _route_id_from_trip(trip_id)
+    log.info("  route_id extraído: '%s'", route_id)
+
     df_previsto = _load_stop_times_drive()
 
-    df_real = _load_gtfs_rt_line(route_id)
+    try:
+        df_real = _load_gtfs_rt_line(route_id)
+    except ValueError as e:
+        log.warning("  %s", e)
+        return None, str(e)
+
     if df_real[df_real["viaje_id"] == trip_id].empty:
-        log.warning("trip_id '%s' no encontrado en el feed RT.", trip_id)
-        return None
+        msg = f"trip_id '{trip_id}' no encontrado en el feed RT de la línea '{route_id}' ({len(df_real)} trips en el feed)"
+        log.warning("  %s", msg)
+        return None, msg
 
     df_gtfs = _gtfs_rt_to_features(df_real, df_previsto)
 
-    # Colapsar a parada más inminente por trip para que _add_line_features
-    # opere con un tren por fila
     if "stops_to_end" in df_gtfs.columns:
         df_collapsed = (
             df_gtfs[df_gtfs["stops_to_end"] > 0]
@@ -420,27 +423,26 @@ def get_single_trip_features(trip_id: str) -> dict | None:
     else:
         df_collapsed = df_gtfs.copy()
 
-    # Rolling delay y headway calculados sobre todos los trips de la línea
     df_collapsed = _add_line_features(df_collapsed)
 
-    # Filtrar al trip pedido
     df = df_collapsed[df_collapsed["match_key"] == trip_id].copy()
     if df.empty:
-        return None
+        msg = f"trip_id '{trip_id}' presente en el feed pero sin paradas restantes (stops_to_end=0, posiblemente finalizando recorrido)"
+        log.warning("  %s", msg)
+        return None, msg
 
-    # Lags desde MinIO (sin actualizar el estado, solo lectura)
     df = _apply_and_update_lags(df, update_cache=False)
-
-    # Enriquecimiento completo: clima, eventos, alertas
     df = _merge_all(df)
-
     df = _add_derived_features(df)
     df = df.drop(columns=[c for c in DROP_COLS if c in df.columns])
 
-    return df.iloc[0].to_dict() if not df.empty else None
+    if df.empty:
+        return None, "DataFrame vacío tras enriquecimiento (clima/eventos/alertas)"
+
+    return df.iloc[0].to_dict(), ""
 
 
-def get_trip_features(match_key: str) -> dict | None:
+def get_trip_features(match_key: str) -> tuple[dict | None, str]:
     """Genera las features de un trip listas para predecir (encoding de categóricas en el caller)."""
     return get_single_trip_features(match_key)
 

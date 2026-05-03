@@ -69,11 +69,11 @@ FUENTES = {
     },
     "1234567S": {
         "url": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs",
-        "lineas": ["1", "2", "3", "4", "5", "6", "7", "S"]
+        "lineas": ["1", "2", "3", "4", "5", "6", "7", "S", "GS", "FS", "H"]
     },
     "SIR": {
         "url": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si",
-        "lineas": ["SIR"]
+        "lineas": ["SIR", "SI"]
     }
 }
 

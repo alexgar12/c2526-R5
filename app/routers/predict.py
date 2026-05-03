@@ -285,9 +285,13 @@ async def predict_train(
     """
     registry = request.app.state.registry
 
-    features = await asyncio.to_thread(get_trip_features, match_key)
+    features, reason = await asyncio.to_thread(get_trip_features, match_key)
     if features is None:
-        raise HTTPException(404, detail=f"match_key '{match_key}' no encontrado en el feed RT")
+        return {
+            "match_key":   match_key,
+            "predictable": False,
+            "reason":      reason,
+        }
 
     current_delay_s       = float(features.get("delay_seconds", 0.0))
     stops_to_end          = int(features.get("stops_to_end", 0))

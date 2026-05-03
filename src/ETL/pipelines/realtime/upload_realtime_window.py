@@ -40,7 +40,7 @@ NUM_VENTANAS_A_MANTENER = 8
 TIEMPO_VENTANA = "15"   
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
-BASE_DIR = Path(__file__).resolve().parent.parent / "alertas_oficiales_tiempo_real"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent / "alertas_oficiales_tiempo_real"
 TOKEN_PATH = BASE_DIR / "token_drive.json"
 
 
