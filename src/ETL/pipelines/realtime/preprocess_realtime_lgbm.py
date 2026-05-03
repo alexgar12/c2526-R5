@@ -261,6 +261,8 @@ _RT_ROUTE_ALIAS: dict[str, str] = {
 
 def _load_gtfs_rt_line(route_id: str) -> pd.DataFrame:
     """Llama solo al endpoint GTFS-RT de la línea dada."""
+    # El alias resuelve el URL (SI → feed de SIR), pero extraccion_linea usa
+    # el route_id que emite el feed, que puede diferir del alias (ej. 'SI' no 'SIR').
     rt_route_id = _RT_ROUTE_ALIAS.get(route_id, route_id)
 
     url = None
@@ -269,10 +271,16 @@ def _load_gtfs_rt_line(route_id: str) -> pd.DataFrame:
             url = info["url"]
             break
     if url is None:
+        # Intentar también con el route_id original (ya puede estar en FUENTES)
+        for info in FUENTES.values():
+            if route_id.upper() in [l.upper() for l in info["lineas"]]:
+                url = info["url"]
+                break
+    if url is None:
         raise ValueError(f"route_id '{route_id}' no encontrado en FUENTES")
 
-    log.info("  [GTFS RT] Llamando endpoint para línea %s...", rt_route_id)
-    datos = extraccion_linea(url, rt_route_id)
+    log.info("  [GTFS RT] Llamando endpoint para línea %s...", route_id)
+    datos = extraccion_linea(url, route_id)
     df = pd.DataFrame(datos)
     if df.empty:
         raise ValueError(f"Sin datos RT para la línea {route_id}")
