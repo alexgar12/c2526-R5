@@ -5,7 +5,24 @@ Proyecto de Datos I – Grupo 5
 
 Facultad de Informática – UCM
 
-## Descripción del proyecto
+## Índice
+
+1. [Descripción de los objetivos](#1-descripción-de-los-objetivos)
+2. [Estructura del repositorio](#2-estructura-del-repositorio)
+3. [Almacenamiento en MinIO](#3-almacenamiento-en-minio)
+4. [Configuración del entorno de desarrollo](#4-configuración-del-entorno-de-desarrollo)
+5. [Ejecución de los pipelines](#5-ejecución-de-los-pipelines)
+6. [Arquitectura interna del pipeline](#6-arquitectura-interna-del-pipeline)
+7. [Uso de notebooks](#7-uso-de-notebooks)
+8. [Uso de modelos de ML](#8-uso-de-modelos-de-ml)
+9. [Resumen de los resultados de los mejores modelos](#9-resumen-de-los-resultados-de-los-mejores-modelos)
+10. [Instrucciones para ejecutar la aplicación web](#10-instrucciones-para-ejecutar-la-aplicación-web)
+11. [Instrucciones para crear y ejecutar el contenedor](#11-instrucciones-para-crear-y-ejecutar-el-contenedor)
+12. [Equipo de desarrollo](#12-equipo-de-desarrollo)
+
+
+
+## 1. Descripción de los objetivos
 
 Express-Bound integra datos operativos y contextuales del metro de Nueva York para estimar retrasos a corto plazo y anticipar incidencias.
 
@@ -19,7 +36,7 @@ El enfoque es de predicción a corto horizonte (10–30 minutos), utilizando tan
 
 El sistema está diseñado siguiendo una arquitectura tipo data lake (raw → processed → cleaned) sobre almacenamiento en MinIO, garantizando trazabilidad y reproducibilidad del pipeline.
 
-## Estructura del proyecto
+## 2. Estructura del repositorio
 ```
 ├── src/
 │   ├── common/                        # Utilidades compartidas (MinIO client, etc.)
@@ -70,7 +87,7 @@ El sistema está diseñado siguiendo una arquitectura tipo data lake (raw → pr
 └── README.md                          # Este fichero
 ```
 
-## Almacenamiento en MinIO
+## 3. Almacenamiento en MinIO
 
 Los datos del proyecto se almacenan en un bucket S3-compatible (MinIO),
 siguiendo una arquitectura tipo data lake organizada en distintas capas
@@ -113,17 +130,17 @@ pd1/
     │
     └── realtime/
 ```
-## Descripción de cada capa
+### Descripción de cada capa
 
-### raw/
+#### raw/
 Contiene los datos originales descargados de las fuentes externas y sin tratar.
 No se modifican una vez almacenados.
 
-### processed/
+#### processed/
 Datos transformados a un formato estructurado (principalmente Parquet),
 unidos de distintas fuentes pero todavía sin limpieza exhaustiva.
 
-### cleaned/
+#### cleaned/
 Datos limpios y validados. Incluye:
 - Eliminación de duplicados
 - Corrección de tipos
@@ -131,16 +148,16 @@ Datos limpios y validados. Incluye:
 - Reportes de calidad
 
 
-### final/
+#### final/
 Dataset final con todas las fuentes integradas y listas para el modelado. Los datos se organizan por año (`year=2025/`, `year=2026/`) y dentro de cada año por mes (`month=*/`), un Parquet por mes.
 
-### aggregations/
+#### aggregations/
 Dataset completo de 2025 y 2026 con todos los meses agregados a resolución de 60 minutos. Sirve como entrada para los modelos de propagación y análisis a nivel de red, y de alertas.
 
-### realtime/
+#### realtime/
 Estado actual de la red almacenado por el worker de tiempo real. Se sobreescribe de forma continua con los datos más recientes procedentes de los feeds GTFS-RT de la MTA.
 
-## Convención de nombres
+### Convención de nombres
 Los objetos se almacenan siguiendo la convención:
 
 grupo5/processed/nombre_fuente/date=YYYY-MM-DD/nombre_archivo.parquet
@@ -150,7 +167,7 @@ Lo cual permite:
 - Procesamiento incremental
 - Re-ejecución parcial del pipeline en caso de fallo
 
-## Configuración del entorno de desarrollo
+## 4. Configuración del entorno de desarrollo
 
 El proyecto utiliza Python y el gestor de dependencias `uv`.
 
@@ -214,7 +231,7 @@ El proyecto utiliza [Weights & Biases](https://wandb.ai) para el seguimiento de 
 uv sync
 ```
 
-## Ejecución de los pipelines
+## 5. Ejecución de los pipelines
 
 El proyecto está automatizado mediante dos orquestadores principales ubicados en:
 
@@ -306,7 +323,7 @@ raw/ → processed/ → cleaned/ → final/ → aggregations/
 
 ---
 
-## Arquitectura interna del pipeline
+## 6. Arquitectura interna del pipeline
 
 ### Pipeline histórico
 
@@ -336,7 +353,7 @@ aggregate_lines_yearly  →  aggregations/      (Parquet anual agregado a resolu
 
 ---
 
-## Uso de notebooks
+## 7. Uso de notebooks
 
 Los notebooks del proyecto están ubicados en:
 
@@ -352,7 +369,7 @@ Se utilizan para:
 
 
 ---
-## Uso de modelos de ML
+## 8. Uso de modelos de ML
 
 Todos los modelos se almacenan en la carpeta models, la cual está dividida por problemas:
 
@@ -473,7 +490,7 @@ artefactos/    — artefactos generados por los scripts anteriores
 
 ---
 
-## Resultados de los mejores modelos
+## 9. Resumen de los resultados de los mejores modelos
 
 ### 1. Anticipación de alertas
 
@@ -545,8 +562,19 @@ El análisis de importancia (*Permutation Feature Importance*) confirma que las 
 - `route_rolling_delay` (congestión de red)
 
 ---
+## 10. Instrucciones para ejecutar la aplicación web
 
-## Despliegue con Docker
+La aplicación web se puede lanzar en local directamente con:
+
+```bash
+uv run fastapi run app/app.py
+```
+
+ **Requisitos previos:**
+- Variables de entorno configuradas en `.env` (ver [sección 4](#4-configuración-del-entorno-de-desarrollo))
+
+---
+## 11. Instrucciones para crear y ejecutar el contenedor
 
 El proyecto incluye un `Dockerfile` que empaqueta tanto la API REST como el worker de ingestión en tiempo real en un único contenedor.
 
@@ -573,7 +601,7 @@ Al iniciarse, el contenedor lanza dos procesos en paralelo:
 
 ---
 
-## Autores
+## 12. Equipo de desarrollo
 
 | | | | | | | | |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
