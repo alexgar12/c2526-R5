@@ -40,24 +40,14 @@
                     </span>
                 </div>
             </div>
-            <p>Calcula tu ruta y evita retrasos</p>
+            <p>Consulta retrasos y evítalos</p>
         </header>
         
         <div class="panel-content">
             <div class="search-box">
-                <div class="input-group">
-                    <label>Origen</label>
-                    <input type="text" id="origin-input" placeholder="¿De dónde sales?" autocomplete="off">
-                    <div id="origin-results" class="autocomplete-dropdown hidden"></div>
-                </div>
-                <div class="input-divider">
-                    <div class="line"></div>
-                    <div class="icon">↓</div>
-                </div>
-                <div class="input-group">
-                    <label>Destino</label>
-                    <input type="text" id="destination-input" placeholder="¿A dónde vas?" autocomplete="off">
-                    <div id="destination-results" class="autocomplete-dropdown hidden"></div>
+                <div class="input-group" style="position:relative">
+                    <label>Estación</label>
+                    <input type="text" id="station-input" placeholder="Busca una estación..." autocomplete="off">
                 </div>
             </div>
 
@@ -125,5 +115,6 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="{{ url_for('static', path='js/main.js') }}"></script>
+    <div id="station-dropdown" class="station-ac hidden"></div>
 </body>
 </html>

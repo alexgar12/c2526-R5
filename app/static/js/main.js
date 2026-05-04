@@ -952,86 +952,133 @@ function checkActiveAlerts() {
 // 11. Planificador de rutas con autocompletado
 // ============================================================
 
+// ============================================================
+// 11. Búsqueda de estación con autocomplete
+// ============================================================
+
+let selectedStationRing = null;
+
+function highlightStation(station) {
+    if (selectedStationRing) { map.removeLayer(selectedStationRing); selectedStationRing = null; }
+    const primaryRoute = station.routes ? station.routes.split(' ')[0] : null;
+    const color = (primaryRoute && ROUTE_COLORS[primaryRoute]) || '#3B82F6';
+    const ringIcon = L.divIcon({
+        className: 'station-selection-ring',
+        html: `<div class="station-ring-outer" style="--ring-color:${color}"></div>`,
+        iconSize: [40, 40], iconAnchor: [20, 20],
+    });
+    selectedStationRing = L.marker([station.lat, station.lon], {
+        icon: ringIcon, interactive: false, zIndexOffset: -100,
+    }).addTo(map);
+    map.flyTo([station.lat, station.lon], 15, { duration: 1.2, easeLinearity: 0.4 });
+}
+
+function normalize(str) {
+    return str.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function stationMatches(station, query) {
+    const n = normalize(station.name), q = normalize(query);
+    return n.includes(q) || n.replace(/\s/g,'').includes(q.replace(/\s/g,''));
+}
+
 function initRoutePlanner() {
-    setupAutocomplete(
-        document.getElementById('origin-input'),
-        document.getElementById('origin-results')
-    );
-    setupAutocomplete(
-        document.getElementById('destination-input'),
-        document.getElementById('destination-results')
-    );
-}
+    const input    = document.getElementById('station-input');
+    const dropdown = document.getElementById('station-dropdown');
+    let focusedIdx = -1;
 
-function setupAutocomplete(input, dropdown) {
-    input.addEventListener('input', () => {
-        const value = input.value.toLowerCase().trim();
-        if (value.length < 2) { dropdown.classList.add('hidden'); return; }
-
-        const filtered = allStations.filter(s => s.name.toLowerCase().includes(value)).slice(0, 5);
-
-        if (filtered.length > 0) {
-            dropdown.innerHTML = '';
-            filtered.forEach(s => {
-                const item = document.createElement('div');
-                item.className   = 'suggestion-item';
-                item.textContent = s.name;
-                item.onclick = () => {
-                    input.value = s.name;
-                    input.dataset.stationId = s.id;
-                    dropdown.classList.add('hidden');
-                    calculateRoute();
-                };
-                dropdown.appendChild(item);
-            });
-            dropdown.classList.remove('hidden');
-        } else {
-            dropdown.classList.add('hidden');
-        }
-    });
-
-    document.addEventListener('click', (e) => {
-        if (!input.contains(e.target) && !dropdown.contains(e.target))
-            dropdown.classList.add('hidden');
-    });
-}
-
-async function calculateRoute() {
-    const originId  = document.getElementById('origin-input').dataset.stationId;
-    const destId    = document.getElementById('destination-input').dataset.stationId;
-    const resultPanel = document.getElementById('route-prediction');
-
-    if (!originId || !destId) return;
-
-    const origin      = allStations.find(s => s.id === originId);
-    const destination = allStations.find(s => s.id === destId);
-
-    resultPanel.classList.remove('hidden');
-
-    const commonLines = findCommonLines(origin, destination);
-    const displayLine = commonLines.length > 0 ? commonLines[0] : origin.routes.split(' ')[0];
-
-    document.getElementById('result-line').textContent = displayLine;
-    document.getElementById('result-line').style.backgroundColor = ROUTE_COLORS[displayLine] || '#3B82F6';
-    document.getElementById('result-station').textContent = origin.name;
-
-    renderDelayCard('result-delay-val', null);
-
-    try {
-        const resp = await fetch(`/api/predict/delay/30m?stop_id=${encodeURIComponent(originId)}`);
-        if (!resp.ok) throw new Error(resp.statusText);
-        const data = await resp.json();
-        const pred = data.predictions?.[0];
-        renderDelayCard('result-delay-val', pred ? pred.delay_minutes * 60 : null);
-    } catch (e) {
-        console.error('Error al obtener retraso de ruta:', e);
+    function reposition() {
+        const r = input.getBoundingClientRect();
+        dropdown.style.top   = (r.bottom + 6) + 'px';
+        dropdown.style.left  = r.left + 'px';
+        dropdown.style.width = r.width + 'px';
     }
-}
 
-function findCommonLines(s1, s2) {
-    const r1 = s1.routes.split(' ');
-    const r2 = s2.routes.split(' ');
-    return r1.filter(line => r2.includes(line));
+    function getItems() { return [...dropdown.querySelectorAll('.ac-item')]; }
+
+    function setFocus(idx) {
+        getItems().forEach((el, i) => el.classList.toggle('ac-focused', i === idx));
+        focusedIdx = idx;
+    }
+
+    function buildItem(station, query) {
+        const item = document.createElement('div');
+        item.className = 'ac-item';
+
+        // Dots
+        const dots = document.createElement('div');
+        dots.className = 'ac-dots';
+        (station.routes || '').split(' ').slice(0, 4).forEach(r => {
+            const d = document.createElement('div');
+            d.className = 'ac-dot';
+            d.style.background = ROUTE_COLORS[r] || '#888';
+            dots.appendChild(d);
+        });
+
+        // Name with highlight
+        const name = document.createElement('div');
+        name.className = 'ac-name';
+        const lo  = normalize(station.name);
+        const q   = normalize(query);
+        const idx = lo.indexOf(q);
+        if (idx >= 0) {
+            name.innerHTML =
+                escHtml(station.name.slice(0, idx)) +
+                `<mark>${escHtml(station.name.slice(idx, idx + q.length))}</mark>` +
+                escHtml(station.name.slice(idx + q.length));
+        } else {
+            name.textContent = station.name;
+        }
+
+        item.appendChild(dots);
+        item.appendChild(name);
+        item.addEventListener('mousedown', e => { e.preventDefault(); selectStation(station); });
+        return item;
+    }
+
+    function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    function selectStation(station) {
+        input.value = station.name;
+        input.dataset.stationId = station.id;
+        dropdown.classList.add('hidden');
+        focusedIdx = -1;
+        highlightStation(station);
+        openStationDetails(station);
+    }
+
+    function showDropdown(query) {
+        if (!query) { dropdown.classList.add('hidden'); return; }
+        const results = allStations.filter(s => stationMatches(s, query)).slice(0, 8);
+        if (!results.length) { dropdown.classList.add('hidden'); return; }
+        dropdown.innerHTML = '';
+        results.forEach(s => dropdown.appendChild(buildItem(s, query)));
+        focusedIdx = -1;
+        reposition();
+        dropdown.classList.remove('hidden');
+    }
+
+    input.addEventListener('input', () => showDropdown(input.value.trim()));
+
+    input.addEventListener('keydown', e => {
+        const items = getItems();
+        if (e.key === 'ArrowDown') { e.preventDefault(); setFocus(Math.min(focusedIdx + 1, items.length - 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setFocus(Math.max(focusedIdx - 1, 0)); }
+        else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (focusedIdx >= 0) { items[focusedIdx].dispatchEvent(new MouseEvent('mousedown')); }
+            else {
+                const q = input.value.trim();
+                const match = allStations.find(s => stationMatches(s, q));
+                if (match) selectStation(match);
+            }
+        } else if (e.key === 'Escape') { dropdown.classList.add('hidden'); }
+    });
+
+    input.addEventListener('blur', () => setTimeout(() => dropdown.classList.add('hidden'), 150));
+    window.addEventListener('resize', () => { if (!dropdown.classList.contains('hidden')) reposition(); });
 }
 
 // ============================================================

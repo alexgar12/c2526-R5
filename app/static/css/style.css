@@ -270,26 +270,57 @@ body {
 }
 
 /* ── Autocomplete dropdown ── */
-.autocomplete-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0; right: 0;
-    background: var(--dropdown-bg);
-    border: 1px solid var(--dropdown-border);
-    border-radius: 10px;
+.station-ac {
+    position: fixed;
+    background: var(--panel-bg);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    z-index: 9999;
     overflow: hidden;
-    z-index: 2000;
-    box-shadow: var(--dropdown-shadow);
+    max-height: 320px;
+    overflow-y: auto;
 }
+.station-ac::-webkit-scrollbar { width: 3px; }
+.station-ac::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 2px; }
 
-.suggestion-item {
+.ac-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     padding: 10px 14px;
-    font-size: 13px;
-    color: var(--suggestion-text);
     cursor: pointer;
-    transition: background 0.15s;
+    border-bottom: 1px solid var(--panel-border);
+    transition: background 0.12s;
 }
-.suggestion-item:hover { background: var(--suggestion-hover); }
+.ac-item:last-child { border-bottom: none; }
+.ac-item:hover, .ac-item.ac-focused { background: var(--suggestion-hover); }
+.ac-dots { display: flex; gap: 3px; flex-shrink: 0; }
+.ac-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.6);
+}
+.ac-name { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; }
+.ac-name mark { background: none; color: #3b82f6; font-weight: 700; }
+
+/* ── Station selection ring ── */
+.station-selection-ring { pointer-events: none !important; }
+.station-ring-outer {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    border: 3px solid var(--ring-color, #3B82F6);
+    background: transparent;
+    box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 12px var(--ring-color, #3B82F6);
+    animation: station-ring-pulse 1.6s ease-in-out infinite;
+}
+@keyframes station-ring-pulse {
+    0%   { transform: scale(0.85); opacity: 1; }
+    50%  { transform: scale(1.25); opacity: 0.5; }
+    100% { transform: scale(0.85); opacity: 1; }
+}
 
 .hidden { display: none !important; }
 
