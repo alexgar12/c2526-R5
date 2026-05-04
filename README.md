@@ -589,7 +589,7 @@ podman build -t express-bound .
 ### Ejecución del contenedor
 
 ```bash
-docker run -p 8000:8000 --env-file .env express-bound
+podman run -p 8000:8000 --env-file .env express-bound
 ```
 
 El fichero `.env` debe contener las variables de entorno descritas en la sección [Configuración del entorno de desarrollo](#configuración-del-entorno-de-desarrollo).
