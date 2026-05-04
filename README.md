@@ -583,13 +583,13 @@ El proyecto incluye un `Dockerfile` que empaqueta tanto la API REST como el work
 ### Construcción de la imagen
 
 ```bash
-docker build -t express-bound .
+podman build -t express-bound .
 ```
 
 ### Ejecución del contenedor
 
 ```bash
-docker run -p 8000:8000 --env-file .env express-bound
+podman run -p 8000:8000 --env-file .env express-bound
 ```
 
 El fichero `.env` debe contener las variables de entorno descritas en la sección [Configuración del entorno de desarrollo](#configuración-del-entorno-de-desarrollo).
@@ -601,10 +601,11 @@ Al iniciarse, el contenedor lanza dos procesos en paralelo:
 - **API REST** (`app/app.py`) — servidor FastAPI accesible en `http://localhost:8000`. Expone los endpoints de predicción que consumen los modelos entrenados.
 - **Worker de tiempo real** (`src/ETL/pipelines/realtime/local_realtime_worker.py`) proceso en segundo plano que se conecta a los feeds GTFS-RT de la MTA, descarga el estado actual de la red de metro y lo procesa de forma continua para tenerlo disponible para la inferencia. Sin este worker, la API no dispone de datos frescos con los que generar predicciones.
 
-### Token montado como volúmen
+### Token incluido en la imagen
 
-El token necesario para leer los datos necesarios para inferecia de Google Drive se monta como volúmen en `docker-compose.yml` desde la ruta esperada: 
+El token necesario para acceder a Google Drive se incluye en la imagen en la ruta:
 `src/ETL/alertas_oficiales_tiempo_real/token_drive.json`.
+Si actualizas el token, vuelve a construir la imagen.
 
 ---
 
