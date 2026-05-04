@@ -47,22 +47,16 @@ async def lifespan(app: FastAPI):
     registry = ModelRegistry()
     entity = settings.wandb_entity
 
-    await asyncio.gather(
-        asyncio.to_thread(registry.load_dcrnn,
-            entity, settings.wandb_project_dcrnn, settings.dcrnn_artifact),
-        asyncio.to_thread(registry.load_lgbm_delay_30m,
-            entity, settings.wandb_project_delay, settings.lgbm_delay_30m_artifact),
-        asyncio.to_thread(registry.load_lgbm_delay_end,
-            entity, settings.wandb_project_delay, settings.lgbm_delay_end_artifact),
-        asyncio.to_thread(registry.load_delta_10m,
-            entity, settings.wandb_project_delay, settings.delta_10m_artifact),
-        asyncio.to_thread(registry.load_delta_20m,
-            entity, settings.wandb_project_delay, settings.delta_20m_artifact),
-        asyncio.to_thread(registry.load_delta_30m,
-            entity, settings.wandb_project_delay, settings.delta_30m_artifact),
-        asyncio.to_thread(registry.load_alertas,
-            entity, settings.wandb_project_alertas, settings.alertas_artifact),
-    )
+    for loader, args in [
+        (registry.load_dcrnn,         (entity, settings.wandb_project_dcrnn,   settings.dcrnn_artifact)),
+        (registry.load_lgbm_delay_30m,(entity, settings.wandb_project_delay,   settings.lgbm_delay_30m_artifact)),
+        (registry.load_lgbm_delay_end,(entity, settings.wandb_project_delay,   settings.lgbm_delay_end_artifact)),
+        (registry.load_delta_10m,     (entity, settings.wandb_project_delay,   settings.delta_10m_artifact)),
+        (registry.load_delta_20m,     (entity, settings.wandb_project_delay,   settings.delta_20m_artifact)),
+        (registry.load_delta_30m,     (entity, settings.wandb_project_delay,   settings.delta_30m_artifact)),
+        (registry.load_alertas,       (entity, settings.wandb_project_alertas, settings.alertas_artifact)),
+    ]:
+        await asyncio.to_thread(loader, *args)
 
     if registry.errors:
         logger.warning("Some models failed to load: %s", list(registry.errors.keys()))

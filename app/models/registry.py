@@ -73,19 +73,20 @@ class ModelRegistry:
         full_ref = f"{entity}/{project}/{artifact_ref}"
         logger.info("Downloading artifact: %s", full_ref)
         last_exc = None
-        for attempt in range(3):
+        for attempt in range(4):
             if attempt:
-                wait = 10 * attempt
-                logger.info("Rate limited, retrying %s in %ds (attempt %d/3)…", artifact_ref, wait, attempt + 1)
+                wait = 15 * attempt
+                logger.info("W&B error, retrying %s in %ds (attempt %d/4)…", artifact_ref, wait, attempt + 1)
                 time.sleep(wait)
             try:
-                api = wandb.Api(timeout=60)
+                api = wandb.Api(timeout=120)
                 artifact = api.artifact(full_ref)
                 tmpdir = tempfile.mkdtemp(prefix="wandb_")
                 artifact.download(root=tmpdir)
                 return Path(tmpdir)
             except Exception as exc:
-                if "429" in str(exc) or "rate limit" in str(exc).lower():
+                msg = str(exc).lower()
+                if "429" in str(exc) or "500" in str(exc) or "rate limit" in msg or "timed out" in msg or "timeout" in msg or "deadline" in msg:
                     last_exc = exc
                     continue
                 raise
