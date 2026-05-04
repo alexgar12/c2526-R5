@@ -529,6 +529,48 @@ def union_dataframes(df1, df2, inference_mode=False):
     # Limpiar columna de indicador de merge
     df = df.drop(columns=['_merge'])
 
+    # Tercer fallback: normalizar shape suffix del trip_id.
+    # La MTA a veces publica trips sin shape (ej. '025900_A..N') que en stop_times
+    # existen con shape (ej. '025900_A..N09X011'). Stripeamos el sufijo numérico
+    # tras N/S en ambos lados y reintentamos el merge solo para las filas sin match.
+    _shape_re = re.compile(r'(?<=[NS])\d+\w*$')
+    still_missing = df['trip_id'].isna()
+    if still_missing.any():
+        df1_missing = df.loc[still_missing, [c for c in df1.columns if c in df.columns]].copy()
+        df1_missing['_viaje_base'] = df1_missing['viaje_id'].str.replace(_shape_re, '', regex=True)
+        df1_missing['_row_id'] = df1_missing.index
+
+        df2_norm = df2.copy()
+        df2_norm['_trip_base'] = df2_norm['trip_id'].str.replace(_shape_re, '', regex=True)
+
+        fallback_norm = pd.merge(
+            df1_missing,
+            df2_norm,
+            left_on=['_viaje_base', 'parada_id'],
+            right_on=['_trip_base', 'stop_id'],
+            how='left',
+            suffixes=('', '_fn')
+        )
+        fallback_norm = (
+            fallback_norm
+            .sort_values(['_row_id'])
+            .drop_duplicates(subset=['_row_id'], keep='first')
+            .set_index('_row_id')
+        )
+
+        sched_cols_norm = [c for c in df2.columns if c not in df1.columns]
+        for col in sched_cols_norm:
+            if col in df.columns:
+                df.loc[df1_missing.index, col] = fallback_norm[col].reindex(df1_missing.index).values
+            else:
+                series = pd.Series(index=df.index, dtype=object)
+                series.loc[df1_missing.index] = fallback_norm[col].reindex(df1_missing.index).values
+                df[col] = series
+
+        fn_cols = [c for c in df.columns if c.endswith('_fn') or c in ('_viaje_base', '_trip_base')]
+        if fn_cols:
+            df = df.drop(columns=fn_cols, errors='ignore')
+
     # Marcar trenes no programados: no encontraron match en el schedule
     df['is_unscheduled'] = df['trip_id'].isna()
 

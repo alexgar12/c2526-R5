@@ -65,23 +65,12 @@ def fetch_positions(
             logger.warning("Feed %s unavailable: %s", feed_key, exc)
             continue
 
-        now_ts = int(time.time())
-        # Trips con trip_update que tienen al menos una parada en el pasado
-        started_trips: set[str] = set()
-        # Trips con trip_update (aunque sea todo futuro) — tienen horario RT
+        # Trips con trip_update — tienen horario RT
         trips_with_update: set[str] = set()
         for entity in msg.entity:
             if not entity.HasField("trip_update"):
                 continue
-            tu = entity.trip_update
-            trips_with_update.add(tu.trip.trip_id)
-            for stu in tu.stop_time_update:
-                arrival = stu.arrival.time if stu.HasField("arrival") else 0
-                departure = stu.departure.time if stu.HasField("departure") else 0
-                t = arrival or departure
-                if t and t <= now_ts:
-                    started_trips.add(tu.trip.trip_id)
-                    break
+            trips_with_update.add(entity.trip_update.trip.trip_id)
 
         for entity in msg.entity:
             if not entity.HasField("vehicle"):
@@ -94,9 +83,6 @@ def fetch_positions(
             has_update = trip_id in trips_with_update
             # Sin trip_update en el feed → tren sin horario RT (lo mostramos pero no predecimos)
             is_unscheduled = not has_update
-            # Con trip_update pero todas las paradas en el futuro → pre-asignado, no mostrar
-            if has_update and trip_id not in started_trips:
-                continue
 
             stop_id = v.stop_id
             coords = gtfs_stops.get(stop_id)

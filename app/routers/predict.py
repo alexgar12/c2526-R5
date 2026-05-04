@@ -287,10 +287,17 @@ async def predict_train(
 
     features, reason = await asyncio.to_thread(get_trip_features, match_key)
     if features is None:
+        if "no encontrado en el feed RT" in reason:
+            reason_type = "temporal"
+        elif "última parada" in reason:
+            reason_type = "ended"
+        else:
+            reason_type = "unscheduled"
         return {
             "match_key":   match_key,
             "predictable": False,
             "reason":      reason,
+            "reason_type": reason_type,
         }
 
     current_delay_s       = float(features.get("delay_seconds", 0.0))

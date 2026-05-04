@@ -480,6 +480,11 @@ def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
 
     df = _apply_and_update_lags(df, update_cache=False)
 
+    # Trenes sin match en stop_times: is_unscheduled=True → no hay horario estático,
+    # no se puede predecir delay. Devolver antes de enriquecer con clima/eventos.
+    if "is_unscheduled" in df.columns and bool(df.iloc[0].get("is_unscheduled", False)):
+        return None, "Tren sin horario en GTFS estático — predicción no disponible"
+
     # Para trenes en tránsito el delay_seconds puede ser NaN (parada futura sin
     # match en stop_times). Usar lagged_delay_1 como proxy del último delay conocido.
     if "delay_seconds" in df.columns and "lagged_delay_1" in df.columns:

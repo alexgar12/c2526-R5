@@ -491,10 +491,10 @@ async function openTrainPopup(train, marker) {
 
     // Unscheduled / added trains have no scheduled data → prediction is not possible
     if (!train.is_predictable) {
-        const reason = train.schedule_relationship === 1 ? 'Servicio adicional' : 'Sin horario programado';
+        const reason = train.schedule_relationship === 1 ? 'Servicio adicional' : 'Tren no programado';
         marker.bindPopup(
             `<div>${headerHtml}<div class="train-popup-body">${metaBlock}
-                <div class="train-unscheduled">${reason} — predicción no disponible</div>
+                <div class="train-info-neutral">${reason} — predicción no disponible</div>
             </div></div>`,
             popupOpts
         ).openPopup();
@@ -539,9 +539,18 @@ async function openTrainPopup(train, marker) {
 
     let bodyContent;
     if (!data) {
-        bodyContent = `<div class="train-unscheduled">No se pudo obtener predicción</div>`;
+        bodyContent = `<div class="train-info-neutral">No se pudo obtener predicción</div>`;
     } else if (data.predictable === false) {
-        bodyContent = `<div class="train-unscheduled">${data.reason || 'Predicción no disponible'}</div>`;
+        if (data.reason_type === 'temporal') {
+            bodyContent = `<div class="train-temporal">
+                Datos RT momentáneamente no disponibles — espera a que el tren avance a la siguiente parada
+            </div>`;
+        } else {
+            const msg = data.reason_type === 'ended'
+                ? 'Tren finalizando recorrido'
+                : 'Tren no programado';
+            bodyContent = `<div class="train-info-neutral">${msg} — predicción no disponible</div>`;
+        }
     } else {
         const curDelay = data.current_delay_s;
         const stopsLeft = data.stops_to_end;

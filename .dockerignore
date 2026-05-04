@@ -12,3 +12,21 @@ docs/
 *.env
 .claude/
 CLAUDE.md
+
+# Training and research — not needed at runtime
+src/models/prediccion_retrasos/
+src/models/modelos_alertas/Optuna/
+src/models/modelos_alertas/Random/
+src/models/modelos_alertas/analytics/
+src/models/propagacion_estacion/utils/
+src/models/verificacion_modelos/
+src/models/common/
+src/ETL/pipelines/historical/
+src/ETL/gtfs_historico/
+src/web/
+
+# Dev/local utilities
+credentials.json
+generar_token_drive.py
+README.md
+.env.example
