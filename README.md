@@ -583,7 +583,7 @@ El proyecto incluye un `Dockerfile` que empaqueta tanto la API REST como el work
 ### Construcción de la imagen
 
 ```bash
-docker build -t express-bound .
+podman build -t express-bound .
 ```
 
 ### Ejecución del contenedor
