@@ -2,10 +2,6 @@
 <img width="700" alt="Logo Express Bound" src="https://github.com/user-attachments/assets/4ace5aa6-b83f-4230-8359-d3aeced787a1" />
 </div>
 
-# Express-Bound
-Proyecto de Datos I – Grupo 5
-
-Facultad de Informática – UCM
 
 ## Índice
 
@@ -343,17 +339,19 @@ aggregate_lines_yearly  →  aggregations/      (Parquet anual agregado a resolu
 
 ### Pipeline en tiempo real
 
-- **`generate_realtime_dataset.py`** pieza central del pipeline. Fusiona en tiempo real las cuatro fuentes de datos (GTFS-RT, Open-Meteo, SeatGeek/ESPN/NYC Open Data y alertas Gmail MTA) y produce un dataframe con el mismo esquema de columnas que el dataset histórico, garantizando compatibilidad directa con los modelos entrenados.
+- **`generate_realtime_dataset.py`** fusiona en tiempo real las cuatro fuentes (GTFS-RT, Open-Meteo, SeatGeek/ESPN y alertas Gmail MTA) produciendo un dataframe compatible con el esquema histórico.
 
-- **`aggregate_realtime_dataset.py`** equivalente en tiempo real de las agregaciones históricas. Recibe el dataframe de `generate_realtime_dataset` y lo agrega en ventanas temporales de X minutos (por defecto 30), agrupando por parada, línea y dirección.
+- **`aggregate_realtime_dataset.py`** agrega el dataframe anterior en ventanas temporales de X minutos (por defecto 30), agrupando por parada, línea y dirección.
 
-- **`upload_realtime_window.py`** orquesta la ejecución del pipeline RT completo y sube la ventana agregada más reciente a Google Drive, manteniendo solo las N ventanas más recientes. La carpeta la gestiona una cuenta de servicio y se comparte automáticamente con los emails configurados en `GDRIVE_SHARE_EMAILS`.
+- **`upload_realtime_window.py`** orquesta el pipeline RT completo y sube la ventana más reciente a Google Drive, manteniendo solo las N últimas.
 
-- **`upload_daily_data.py`** se ejecuta una vez al día a las 00:00 hora NY (cron en VM de Google Cloud). Sube a Google Drive los datos estáticos del día: GTFS `stop_times`, clima y eventos. Esto evita tener que hacer llamadas a las apis repetidamente obteniendo el mismo resultado.
+- **`upload_daily_data.py`** cron diario (00:00 NY) que sube a Drive los datos estáticos del día: GTFS `stop_times`, clima y eventos.
 
-- **`preprocess_realtime_lgbm.py`** construye el vector de features de inferencia para un `match_key` concreto, necesario para los modelos `LightGBM`. Lee los datos estáticos desde Google Drive (actualizados por `upload_daily_data.py` para agilizar el proceso) y hace las únicas dos llamadas en tiempo real necesarias: GTFS-RT de la línea del viaje y alertas Gmail MTA. También gestiona el estado de lags (delays pasados) en MinIO para poder conseguir el delay de un tren en sus dos paradas anteriores, necesarios para predecir.
+- **`preprocess_realtime_lgbm.py`** construye el vector de features para los modelos LightGBM a partir de datos estáticos de Drive y dos llamadas en tiempo real (GTFS-RT y alertas Gmail MTA).
 
-- **`local_realtime_worker.py`** proceso continuo que se ejecuta dentro del contenedor (cada 90s). Llama a `preprocess_realtime_lgbm.update_lag_state()` para mantener el estado de lags de todos los viajes activos en MinIO. De este modo la API siempre tiene el retraso de las paradas anteriores de un tren actualizadas.
+- **`local_realtime_worker.py`** proceso continuo dentro del contenedor (cada 90s) que actualiza el estado de lags de todos los viajes activos en MinIO.
+
+
 
 ---
 
@@ -393,13 +391,13 @@ optuna/
 random/
 ```
 
-Los entrenamientos y evaluación se almacenan en 
+Los entrenamientos y evaluación se almacenan en :
 
 ```
 common/
 ```
 
-El análisis de desempeño de los nuevos datos se almacena en 
+El análisis de desempeño de los nuevos datos se almacena en :
 
 ```
 analytics/
@@ -413,7 +411,7 @@ Se almacenan en la carpeta
 prediccion_retrasos/
 ```
 
-Este modelo se divide en 4 subproblemas
+Este modelo se divide en 4 subproblemas:
 
 - Predicción de retrasos a 30 minutos vista para los trenes cuyo que estarán en funcionamiento más de 30 minutos.
 
@@ -617,4 +615,7 @@ El token necesario para leer los datos necesarios para inferecia de Google Drive
 | [<img src="https://github.com/34maario.png" width="100" height="100">](https://github.com/34maario) | [<img src="https://github.com/alexgar12.png" width="100" height="100">](https://github.com/alexgar12) | [<img src="https://github.com/chiaralg06.png" width="100" height="100">](https://github.com/chiaralg06) | [<img src="https://github.com/davidr210.png" width="100" height="100">](https://github.com/davidr210) | [<img src="https://github.com/IvanGavaaaa.png" width="100" height="100">](https://github.com/IvanGavaaaa) | [<img src="https://github.com/juannjurado.png" width="100" height="100">](https://github.com/juannjurado) | [<img src="https://github.com/juliahuergoucm.png" width="100" height="100">](https://github.com/juliahuergoucm) | [<img src="https://github.com/sergioduenas10.png" width="100" height="100">](https://github.com/sergioduenas10) |
 | [Mario González](https://github.com/34maario) | [Alex García](https://github.com/alexgar12) | [Chiara Gómez](https://github.com/chiaralg06) | [David Rodríguez](https://github.com/davidr210) | [Iván García](https://github.com/IvanGavaaaa) | [Juan Jurado](https://github.com/juannjurado) | [Julia Huergo](https://github.com/juliahuergoucm) | [Sergio Dueñas](https://github.com/sergioduenas10) |
 
-Curso 2025-2026
+
+*Proyecto de Datos I – Grupo 5*
+*Ingeniería de Datos e Inteligencia Artificial - Curso 2025-2026*
+*Universidad Complutense de Madrid*
