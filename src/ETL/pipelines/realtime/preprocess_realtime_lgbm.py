@@ -319,7 +319,7 @@ def _gtfs_rt_to_features(df_real: pd.DataFrame, df_previsto: pd.DataFrame) -> pd
     Equivalente a load_realtime_gtfs() pero para una sola línea.
     """
     log.info("  [GTFS] Calculando retrasos...")
-    df = union_dataframes(df_real, df_previsto)
+    df = union_dataframes(df_real, df_previsto, inference_mode=True)
     if df.empty:
         raise ValueError("DataFrame GTFS vacío tras unión.")
 
@@ -444,7 +444,8 @@ def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
     trip_id_norm = _shape_re.sub('', trip_id)
     df_real_norm = df_real["viaje_id"].str.replace(_shape_re, '', regex=True)
     if not (df_real_norm == trip_id_norm).any():
-        msg = f"trip_id '{trip_id}' no encontrado en el feed RT de la línea '{route_id}' ({len(df_real)} trips en el feed)"
+        n_trips = df_real["viaje_id"].nunique()
+        msg = f"trip_id '{trip_id}' no encontrado en el feed RT de la línea '{route_id}' ({n_trips} trips únicos en el feed)"
         log.warning("  %s", msg)
         return None, msg
 
@@ -466,11 +467,25 @@ def get_single_trip_features(trip_id: str) -> tuple[dict | None, str]:
     match_key_norm = df_collapsed["match_key"].str.replace(_shape_re, '', regex=True)
     df = df_collapsed[match_key_norm == trip_id_norm].copy()
     if df.empty:
-        msg = f"trip_id '{trip_id}' presente en el feed pero sin paradas restantes (stops_to_end=0, posiblemente finalizando recorrido)"
+        # Comprobar si el tren tiene paradas en df_gtfs pero todas con stops_to_end=0
+        # (está en la última parada) vs. no aparece en df_gtfs en absoluto
+        mk_norm_all = df_gtfs["match_key"].str.replace(_shape_re, '', regex=True)
+        trip_in_gtfs = (mk_norm_all == trip_id_norm).any()
+        if trip_in_gtfs:
+            msg = f"trip_id '{trip_id}' está en la última parada de su recorrido (stops_to_end=0)"
+        else:
+            msg = f"trip_id '{trip_id}' presente en el feed RT pero sin datos de horario tras el merge (viaje no programado o sin match en stop_times)"
         log.warning("  %s", msg)
         return None, msg
 
     df = _apply_and_update_lags(df, update_cache=False)
+
+    # Para trenes en tránsito el delay_seconds puede ser NaN (parada futura sin
+    # match en stop_times). Usar lagged_delay_1 como proxy del último delay conocido.
+    if "delay_seconds" in df.columns and "lagged_delay_1" in df.columns:
+        mask = df["delay_seconds"].isna() & df["lagged_delay_1"].notna()
+        df.loc[mask, "delay_seconds"] = df.loc[mask, "lagged_delay_1"]
+
     df = _merge_all(df)
     df = _add_derived_features(df)
     df = df.drop(columns=[c for c in DROP_COLS if c in df.columns])

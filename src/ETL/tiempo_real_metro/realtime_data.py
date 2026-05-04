@@ -452,13 +452,15 @@ def calcular_features_rt(df, df_schedule=None):
 
     return df
 
-
 #  Unión DataFrames
-def union_dataframes(df1, df2):
+def union_dataframes(df1, df2, inference_mode=False):
 
     """
     Une los DataFrames de tiempo real y horarios previstos, calcula el delay
     y aplica las transformaciones finales.
+
+    inference_mode: si True, para trenes sin paradas pasadas (todas futuras)
+    conserva la parada más inmediata como proxy de posición actual.
     """
 
     # Intentar primero merge que respete el día de servicio (Weekday/Saturday/Sunday)
@@ -560,7 +562,26 @@ def union_dataframes(df1, df2):
         print(f"  [WARN] {bad_match.sum()} filas marcadas unscheduled (|delay|>{MAX_DELAY_MATCH}s)")
 
     # Descartar paradas futuras: solo nos interesan las ya pasadas o en curso.
-    df = df[df['timestamp'] >= df['hora_llegada']].copy()
+    df_past = df[df['timestamp'] >= df['hora_llegada']].copy()
+
+    if inference_mode:
+        # Para trenes en tránsito (todas sus paradas son futuras), conservar la
+        # parada más inmediata como proxy de posición. Sin esto, el tren queda
+        # con 0 filas y se reporta falsamente como "finalizando recorrido".
+        trips_with_past = set(df_past['viaje_id']) if not df_past.empty else set()
+        trips_no_past = set(df['viaje_id']) - trips_with_past
+        if trips_no_past:
+            df_imminent = (
+                df[df['viaje_id'].isin(trips_no_past) & (df['timestamp'] < df['hora_llegada'])]
+                .sort_values('hora_llegada')
+                .drop_duplicates(subset=['viaje_id'], keep='first')
+                .copy()
+            )
+            df = pd.concat([df_past, df_imminent], ignore_index=True)
+        else:
+            df = df_past
+    else:
+        df = df_past
 
     #Filtro para delays con valores masivos y transformacion del día de la semana a valor numérico
     df = filter_delay_outliers(df)
