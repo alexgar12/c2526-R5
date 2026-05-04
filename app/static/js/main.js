@@ -102,6 +102,71 @@ const ROUTE_PARALLEL_INDEX = {
 };
 
 /**
+ * Punto más cercano sobre el segmento AB al punto P (coordenadas cartesianas 2D).
+ * Devuelve [x, y] en el segmento.
+ */
+function nearestPointOnSegment(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return [ax, ay];
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+    return [ax + t * dx, ay + t * dy];
+}
+
+/**
+ * Proyecta [lat, lon] al punto más cercano del shape de routeId con el offset
+ * visual ya aplicado, de forma que los iconos de tren queden sobre la línea dibujada.
+ * Si no hay shape o el tren está a más de 300 m, devuelve la posición original.
+ */
+function snapTrainToShape(lat, lon, routeId) {
+    if (!rawShapesDataCache) return [lat, lon];
+    const data = rawShapesDataCache[routeId];
+    if (!data) return [lat, lon];
+
+    const parallel = ROUTE_PARALLEL_INDEX[routeId] || { idx: 0, total: 1 };
+    const centerOffset = (parallel.total - 1) / 2;
+    const offsetIndex = parallel.offsetOverride !== undefined
+        ? parallel.offsetOverride / OFFSET_METERS
+        : (parallel.idx - centerOffset);
+
+    const segmentsList = (data.length > 0 && Array.isArray(data[0][0])) ? data : [data];
+    const cosLat = Math.cos(lat * Math.PI / 180);
+
+    let bestDistSq = Infinity;
+    let bestPt = [lat, lon];
+
+    for (const rawPts of segmentsList) {
+        const points = offsetIndex !== 0
+            ? offsetLatLngsMeters(rawPts, offsetIndex * OFFSET_METERS)
+            : rawPts;
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const [a0, a1] = points[i];
+            const [b0, b1] = points[i + 1];
+
+            // Convertir a metros locales con origen en points[i]
+            const px = (lon  - a1) * 111320 * cosLat;
+            const py = (lat  - a0) * 111320;
+            const bx = (b1   - a1) * 111320 * cosLat;
+            const by = (b0   - a0) * 111320;
+
+            const [nx, ny] = nearestPointOnSegment(px, py, 0, 0, bx, by);
+            const dSq = (px - nx) ** 2 + (py - ny) ** 2;
+
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestPt = [
+                    a0 + ny / 111320,
+                    a1 + nx / (111320 * cosLat),
+                ];
+            }
+        }
+    }
+
+    return bestDistSq < 300 * 300 ? bestPt : [lat, lon];
+}
+
+/**
  * Aplica un offset perpendicular fijo en metros a una lista de puntos [[lat, lon], ...].
  * Independiente del zoom — las líneas no saltan al hacer zoom.
  */
@@ -627,7 +692,8 @@ async function refreshTrainPositions() {
         trainLayer.clearLayers();
         trains.forEach(t => {
             if (t.lat == null || t.lon == null) return;
-            const marker = L.marker([t.lat, t.lon], {
+            const [snapLat, snapLon] = snapTrainToShape(t.lat, t.lon, t.route_id);
+            const marker = L.marker([snapLat, snapLon], {
                 icon: createTrainIcon(t.route_id, t.is_predictable),
                 pane: 'trainPane',
             });

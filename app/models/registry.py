@@ -69,7 +69,7 @@ class ModelRegistry:
         self.errors: dict[str, str] = {}
 
     def _download(self, entity: str, project: str, artifact_ref: str) -> Path:
-        api = wandb.Api()
+        api = wandb.Api(timeout=120)
         full_ref = f"{entity}/{project}/{artifact_ref}"
         logger.info("Downloading artifact: %s", full_ref)
         artifact = api.artifact(full_ref)

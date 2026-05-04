@@ -47,22 +47,16 @@ async def lifespan(app: FastAPI):
     registry = ModelRegistry()
     entity = settings.wandb_entity
 
-    await asyncio.gather(
-        asyncio.to_thread(registry.load_dcrnn,
-            entity, settings.wandb_project_dcrnn, settings.dcrnn_artifact),
-        asyncio.to_thread(registry.load_lgbm_delay_30m,
-            entity, settings.wandb_project_delay, settings.lgbm_delay_30m_artifact),
-        asyncio.to_thread(registry.load_lgbm_delay_end,
-            entity, settings.wandb_project_delay, settings.lgbm_delay_end_artifact),
-        asyncio.to_thread(registry.load_delta_10m,
-            entity, settings.wandb_project_delay, settings.delta_10m_artifact),
-        asyncio.to_thread(registry.load_delta_20m,
-            entity, settings.wandb_project_delay, settings.delta_20m_artifact),
-        asyncio.to_thread(registry.load_delta_30m,
-            entity, settings.wandb_project_delay, settings.delta_30m_artifact),
-        asyncio.to_thread(registry.load_alertas,
-            entity, settings.wandb_project_alertas, settings.alertas_artifact),
-    )
+    for loader, args in [
+        (registry.load_dcrnn,          (entity, settings.wandb_project_dcrnn,   settings.dcrnn_artifact)),
+        (registry.load_lgbm_delay_30m, (entity, settings.wandb_project_delay,   settings.lgbm_delay_30m_artifact)),
+        (registry.load_lgbm_delay_end, (entity, settings.wandb_project_delay,   settings.lgbm_delay_end_artifact)),
+        (registry.load_delta_10m,      (entity, settings.wandb_project_delay,   settings.delta_10m_artifact)),
+        (registry.load_delta_20m,      (entity, settings.wandb_project_delay,   settings.delta_20m_artifact)),
+        (registry.load_delta_30m,      (entity, settings.wandb_project_delay,   settings.delta_30m_artifact)),
+        (registry.load_alertas,        (entity, settings.wandb_project_alertas, settings.alertas_artifact)),
+    ]:
+        await asyncio.to_thread(loader, *args)
 
     if registry.errors:
         logger.warning("Some models failed to load: %s", list(registry.errors.keys()))
@@ -192,12 +186,29 @@ def _load_gtfs_static() -> dict:
             lons = [p[1] for p in pts]
             return (max(lats) - min(lats)) + (max(lons) - min(lons))
 
+        def endpoint_key(shape_id: str) -> tuple | None:
+            """Clave (start, end) redondeada a ~1 km para agrupar shapes del mismo ramal."""
+            pts = shapes_by_id.get(shape_id, [])
+            if len(pts) < 2:
+                return None
+            s = (round(pts[0][0], 2), round(pts[0][1], 2))
+            e = (round(pts[-1][0], 2), round(pts[-1][1], 2))
+            return (min(s, e), max(s, e))
+
         gtfs_shapes: dict[str, list] = {}
         for route_id, grp in trips.groupby("route_id_norm"):
-            # Top-4 shapes por extensión geográfica → captura bifurcaciones (ej. línea 2/5 en Brooklyn)
+            # Un shape representativo por ramal único (agrupado por endpoints).
+            # Ordenar por extensión geográfica garantiza que elegimos el shape más
+            # completo de cada ramal (en lugar del top-N arbitrario que podría
+            # excluir ramales cortos como A→Lefferts Blvd).
             unique_shapes = sorted(grp["shape_id"].unique(), key=geo_extent, reverse=True)
+            seen: dict[tuple, str] = {}
+            for shape_id in unique_shapes:
+                key = endpoint_key(shape_id)
+                if key and key not in seen:
+                    seen[key] = shape_id
             segments = []
-            for shape_id in unique_shapes[:4]:
+            for shape_id in seen.values():
                 pts = shapes_by_id.get(shape_id, [])
                 if len(pts) >= 2:
                     segments.append(pts)
