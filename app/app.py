@@ -178,22 +178,31 @@ def _load_gtfs_static() -> dict:
         trips["route_id_norm"] = trips["route_id"].astype(str).map(normalize_route_id)
         trips = trips[trips["route_id_norm"].notna()]
 
-        shape_len = shapes_df.groupby("shape_id").size()
-        route_shapes: dict[str, str] = {}
-        for route_id, grp in trips.groupby("route_id_norm"):
-            best = max(grp["shape_id"].unique(), key=lambda s: shape_len.get(s, 0))
-            route_shapes[str(route_id)] = best
-
         shapes_by_id = {
             sid: sub[["shape_pt_lat", "shape_pt_lon"]].values.tolist()
             for sid, sub in shapes_df.groupby("shape_id")
         }
 
-        gtfs_shapes = {}
-        for route_id, shape_id in route_shapes.items():
+        def geo_extent(shape_id: str) -> float:
+            """Extensión geográfica de un shape: (max_lat-min_lat) + (max_lon-min_lon)."""
             pts = shapes_by_id.get(shape_id, [])
-            if len(pts) >= 2:
-                gtfs_shapes[route_id] = pts
+            if not pts:
+                return 0.0
+            lats = [p[0] for p in pts]
+            lons = [p[1] for p in pts]
+            return (max(lats) - min(lats)) + (max(lons) - min(lons))
+
+        gtfs_shapes: dict[str, list] = {}
+        for route_id, grp in trips.groupby("route_id_norm"):
+            # Top-4 shapes por extensión geográfica → captura bifurcaciones (ej. línea 2/5 en Brooklyn)
+            unique_shapes = sorted(grp["shape_id"].unique(), key=geo_extent, reverse=True)
+            segments = []
+            for shape_id in unique_shapes[:4]:
+                pts = shapes_by_id.get(shape_id, [])
+                if len(pts) >= 2:
+                    segments.append(pts)
+            if segments:
+                gtfs_shapes[str(route_id)] = segments
 
         logger.info("GTFS shapes loaded for %d routes: %s", len(gtfs_shapes), sorted(gtfs_shapes.keys()))
 

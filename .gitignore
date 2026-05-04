@@ -26,9 +26,11 @@ data/processed/*
 .DS_Store
 
 # Google OAuth secrets
-src/ETL/alertas_oficiales_tiempo_real/token.json
+credentials.json
+token.json
 src/ETL/alertas_oficiales_tiempo_real/token_drive.json
-src/ETL/alertas_oficiales_tiempo_real/credentials.json
+src/ETL/alertas_oficiales_tiempo_real/credentials.json 
+src/ETL/alertas_oficiales_tiempo_real/token.json 
 
 # Dataset local
 src/ETL/alertas_oficiales_tiempo_real/mta_dataset.csv

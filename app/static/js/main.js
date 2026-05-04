@@ -76,9 +76,12 @@ const SUBWAY_ROUTES_URL   = '/api/routes';  // Nuevo endpoint: devuelve { lineCo
  */
 const ROUTE_PARALLEL_INDEX = {
     // IRT Broadway-7th Ave
-    '1': { idx: 0, total: 3 }, '2': { idx: 1, total: 3 }, '3': { idx: 2, total: 3 },
+    // Ruta 2 usa offsetOverride fijo: comparte vía con la 5 en Brooklyn (Eastern Pkwy) y necesita
+    // suficiente separación para verse como línea roja independiente junto a la verde.
+    '1': { idx: 0, total: 3 }, '2': { idx: 1, total: 3, offsetOverride: -30 }, '3': { idx: 2, total: 3 },
     // IRT Lexington Ave
-    '4': { idx: 0, total: 3 }, '5': { idx: 1, total: 3 }, '6': { idx: 2, total: 3 },
+    // Ruta 5 idem: offsetOverride opuesto al de la 2 → 60 m de separación en Brooklyn.
+    '4': { idx: 0, total: 3 }, '5': { idx: 1, total: 3, offsetOverride: +30 }, '6': { idx: 2, total: 3 },
     // IND 8th Ave
     'A': { idx: 0, total: 3 }, 'C': { idx: 1, total: 3 }, 'E': { idx: 2, total: 3 },
     // IND 6th Ave
@@ -293,39 +296,46 @@ function redrawShapes() {
     routePolylines = {};
     borderPolylines = [];
 
-    Object.entries(rawShapesDataCache).forEach(([routeCode, points]) => {
+    Object.entries(rawShapesDataCache).forEach(([routeCode, data]) => {
         const color = ROUTE_COLORS[routeCode] || '#3B82F6';
 
-        // Calcular offset de pantalla para separar líneas paralelas
         const parallel = ROUTE_PARALLEL_INDEX[routeCode] || { idx: 0, total: 1 };
         const centerOffset = (parallel.total - 1) / 2;
-        const offsetIndex = (parallel.idx - centerOffset);
+        // offsetOverride permite asignar un offset fijo en metros (independiente de idx/total)
+        // Útil cuando dos rutas comparten vía solo en algunas secciones (ej. 2 y 5 en Brooklyn).
+        const offsetIndex = parallel.offsetOverride !== undefined
+            ? parallel.offsetOverride / OFFSET_METERS
+            : (parallel.idx - centerOffset);
 
-        const latlngs = offsetIndex !== 0 ? offsetLatLngsMeters(points, offsetIndex * OFFSET_METERS) : points;
+        // Compatibilidad: el backend puede devolver [[lat,lon],...] o [[[lat,lon],...],...]
+        const segmentsList = (data.length > 0 && Array.isArray(data[0][0])) ? data : [data];
 
-        // Borde oscuro unificado (una sola línea más gruesa sirve de sombra si está centrado)
-        if (offsetIndex === 0) {
-            const border = L.polyline(points, {
-                color: darkenColor(color, 0.4),
-                weight: 7,
-                opacity: 0.5,
+        segmentsList.forEach((points, segIdx) => {
+            const latlngs = offsetIndex !== 0 ? offsetLatLngsMeters(points, offsetIndex * OFFSET_METERS) : points;
+
+            // Borde oscuro solo en el primer segmento
+            if (offsetIndex === 0 && segIdx === 0) {
+                const border = L.polyline(points, {
+                    color: darkenColor(color, 0.4),
+                    weight: 7,
+                    opacity: 0.5,
+                    lineJoin: 'round',
+                    lineCap: 'round'
+                }).addTo(map);
+                borderPolylines.push(border);
+            }
+
+            const poly = L.polyline(latlngs, {
+                color: color,
+                weight: 3.5,
+                opacity: 0.88,
                 lineJoin: 'round',
-                lineCap: 'round'
+                lineCap: 'round',
+                className: `metro-line metro-line-${routeCode}`
             }).addTo(map);
-            borderPolylines.push(border);
-        }
 
-        // Línea principal
-        const poly = L.polyline(latlngs, {
-            color: color,
-            weight: 3.5,
-            opacity: 0.88,
-            lineJoin: 'round',
-            lineCap: 'round',
-            className: `metro-line metro-line-${routeCode}`
-        }).addTo(map);
-
-        routePolylines[routeCode] = poly;
+            if (segIdx === 0) routePolylines[routeCode] = poly;
+        });
     });
 }
 
@@ -346,7 +356,7 @@ function drawShapeLines(shapesData) {
         redrawShapes();
     });
     
-    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas con offsets de píxeles.`);
+    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas con offsets geográficos fijos.`);
 }
 
 

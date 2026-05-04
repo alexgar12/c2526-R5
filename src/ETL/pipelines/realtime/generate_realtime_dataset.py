@@ -9,7 +9,7 @@ fuentes en vivo del metro de Nueva York.
 
 
 Uso:
-  uv run src/ETL/pipelines/realtime/generate_realtime_dataset.py
+  uv run python src/ETL/pipelines/realtime/generate_realtime_dataset.py
 
 """
 

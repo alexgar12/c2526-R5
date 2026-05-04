@@ -46,12 +46,14 @@ def fetch_positions(
     prev_stop_for_route: dict[tuple[str, str], str],
 ) -> list[dict]:
     """
-    Returns list of {route_id, lat, lon} for all trains currently in service.
+    Returns list of train positions for all vehicles currently in the GTFS-RT feeds.
 
-    STOPPED_AT → coordinates of that stop.
-    IN_TRANSIT_TO / INCOMING_AT → midpoint between the previous stop and the
-    next stop, looked up via (normalized_route_id, stop_id) in prev_stop_for_route.
-    Falls back to next-stop coordinates when the previous stop cannot be resolved.
+    Coordinates: GTFS stop position (STOPPED_AT) or midpoint with previous stop
+    (IN_TRANSIT_TO/INCOMING_AT). Falls back to GPS position if stop unknown.
+
+    Note: MTA removes past stops from trip_update, so has_started is unreliable
+    as a filter — all trains with vehicle entities are shown regardless.
+    is_predictable is True when the train has a trip_update and stops remaining.
     """
     results = []
 
@@ -65,13 +67,30 @@ def fetch_positions(
             logger.warning("Feed %s unavailable: %s", feed_key, exc)
             continue
 
-        # Trips con trip_update — tienen horario RT
-        trips_with_update: set[str] = set()
-        for entity in msg.entity:
-            if not entity.HasField("trip_update"):
-                continue
-            trips_with_update.add(entity.trip_update.trip.trip_id)
+        now_ts = int(time.time())
 
+        # Pasada 1: información completa de cada trip_update.
+        # Los trip_update usan el trip_id canónico (con sufijo de shape, ej. "073200_C..N04R"),
+        # mientras que vehicle a veces emite la versión corta ("073200_C..N").
+        tu_map: dict[str, dict] = {}
+        for e in msg.entity:
+            if not e.HasField("trip_update"):
+                continue
+            tu = e.trip_update
+            tid = tu.trip.trip_id
+            if not tid:
+                continue
+            stops = list(tu.stop_time_update)
+            has_started = False
+            for stu in stops:
+                t = (stu.arrival.time if stu.HasField("arrival") else 0) or \
+                    (stu.departure.time if stu.HasField("departure") else 0)
+                if t and t <= now_ts:
+                    has_started = True
+                    break
+            tu_map[tid] = {"stops": stops, "has_started": has_started}
+
+        # Pasada 2: posiciones de vehículos.
         for entity in msg.entity:
             if not entity.HasField("vehicle"):
                 continue
@@ -79,30 +98,41 @@ def fetch_positions(
             if not v.trip.trip_id or not v.stop_id:
                 continue
 
-            trip_id = v.trip.trip_id
-            has_update = trip_id in trips_with_update
-            # Sin trip_update en el feed → tren sin horario RT (lo mostramos pero no predecimos)
-            is_unscheduled = not has_update
-
             stop_id = v.stop_id
-            coords = gtfs_stops.get(stop_id)
-
             route_norm = _normalize_route(v.trip.route_id)
+            if route_norm is None:
+                continue
 
+            coords = gtfs_stops.get(stop_id)
             if coords is None:
-                if is_unscheduled and v.HasField("position"):
+                if v.HasField("position"):
                     coords = (v.position.latitude, v.position.longitude)
                 else:
                     continue
 
-            if route_norm is None:
-                if is_unscheduled:
-                    route_norm = v.trip.route_id.strip()[:4] or 'X'
-                else:
-                    continue
+            # Resolver trip_id canónico: si vehicle emite ID sin shape suffix,
+            # buscar el trip_update cuyo ID empiece por el ID del vehículo.
+            vid = v.trip.trip_id
+            if vid in tu_map:
+                canonical = vid
+            else:
+                canonical = next((t for t in tu_map if t.startswith(vid)), vid)
+
+            # Extraer stops_to_end del trip_update correspondiente.
+            # No filtramos por has_started: la MTA elimina paradas pasadas del feed,
+            # así que has_started es False para casi todos los trenes en servicio.
+            tu_info = tu_map.get(canonical)
+            if tu_info:
+                stops = tu_info["stops"]
+                current_idx = next(
+                    (i for i, s in enumerate(stops) if s.stop_id == stop_id),
+                    len(stops),
+                )
+                stops_to_end = len(stops) - current_idx - 1
+            else:
+                stops_to_end = 0
 
             lat, lon = coords
-
             if v.current_status in _MOVING:
                 prev_sid = prev_stop_for_route.get((route_norm, stop_id))
                 if prev_sid:
@@ -113,15 +143,16 @@ def fetch_positions(
 
             direction = "N" if stop_id.endswith("N") else "S" if stop_id.endswith("S") else None
             results.append({
-                "route_id": route_norm,
-                "trip_id": v.trip.trip_id,
-                "lat": lat,
-                "lon": lon,
-                "next_stop_id": stop_id,
+                "route_id":              route_norm,
+                "trip_id":               canonical,
+                "lat":                   lat,
+                "lon":                   lon,
+                "next_stop_id":          stop_id,
                 "schedule_relationship": v.trip.schedule_relationship,
-                "direction": direction,
-                "status": v.current_status,
-                "is_predictable": not is_unscheduled,
+                "direction":             direction,
+                "status":                v.current_status,
+                "stops_to_end":          max(stops_to_end, 0),
+                "is_predictable":        tu_info is not None and stops_to_end > 0,
             })
 
     logger.info("Vehicle positions: %d trains fetched", len(results))
