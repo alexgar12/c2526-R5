@@ -612,10 +612,10 @@ El token necesario para leer los datos necesarios para inferecia de Google Drive
 
 | | | | | | | | |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| [<img src="https://github.com/34maario.png" width="100" height="100">](https://github.com/34maario) | [<img src="https://github.com/alexgar12.png" width="100" height="100">](https://github.com/alexgar12) | [<img src="https://github.com/chiaralg06.png" width="100" height="100">](https://github.com/chiaralg06) | [<img src="https://github.com/davidr210.png" width="100" height="100">](https://github.com/davidr210) | [<img src="https://github.com/IvanGavaaaa.png" width="100" height="100">](https://github.com/IvanGavaaaa) | [<img src="https://github.com/juannjurado.png" width="100" height="100">](https://github.com/juannjurado) | [<img src="https://github.com/juliahuergoucm.png" width="100" height="100">](https://github.com/juliahuergoucm) | [<img src="https://github.com/sergioduenas10.png" width="100" height="100">](https://github.com/sergioduenas10) |
+| [<img src="https://github.com/34maario.png?size=100" width="100" height="100">](https://github.com/34maario) | [<img src="https://github.com/alexgar12.png?size=100" width="100" height="100">](https://github.com/alexgar12) | [<img src="https://github.com/chiaralg06.png?size=100" width="100" height="100">](https://github.com/chiaralg06) | [<img src="https://github.com/davidr210.png?size=100" width="100" height="100">](https://github.com/davidr210) | [<img src="https://github.com/IvanGavaaaa.png?size=100" width="100" height="100">](https://github.com/IvanGavaaaa) | [<img src="https://github.com/juannjurado.png?size=100" width="100" height="100">](https://github.com/juannjurado) | [<img src="https://github.com/juliahuergoucm.png?size=100" width="100" height="100">](https://github.com/juliahuergoucm) | [<img src="https://github.com/sergioduenas10.png?size=100" width="100" height="100">](https://github.com/sergioduenas10) |
 | [Mario González](https://github.com/34maario) | [Alex García](https://github.com/alexgar12) | [Chiara Gómez](https://github.com/chiaralg06) | [David Rodríguez](https://github.com/davidr210) | [Iván García](https://github.com/IvanGavaaaa) | [Juan Jurado](https://github.com/juannjurado) | [Julia Huergo](https://github.com/juliahuergoucm) | [Sergio Dueñas](https://github.com/sergioduenas10) |
 
 
-*Proyecto de Datos I – Grupo 5*
-*Ingeniería de Datos e Inteligencia Artificial - Curso 2025-2026*
+*Proyecto de Datos I – Grupo 5*<br>
+*Ingeniería de Datos e Inteligencia Artificial - Curso 2025-2026*<br>
 *Universidad Complutense de Madrid*
