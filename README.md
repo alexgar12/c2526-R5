@@ -195,31 +195,49 @@ Gmail credentials
 Gmail token
 ```
 
+#### Variables de entorno para producción
+
+Para ejecutar la aplicación web únicamente se necesitan las siguientes claves, de las descritas anteriormente:
+```
+MINIO_ACCESS_KEY
+MINIO_SECRET_KEY
+WANDB_API_KEY
+```
+
+
 ### Token de Google Drive (producción)
 
-La API necesita un token OAuth2 en formato JSON para acceder a Google Drive en producción. Genera el token localmente con el script proporcionado:
+La API necesita un token OAuth2 en formato JSON para acceder a Google Drive. El token se guarda en
+`src/ETL/alertas_oficiales_tiempo_real/token_drive.json` y se refresca en ese mismo archivo.
+
+#### Opción A — OAuth de usuario (sin proyecto GCP propio)
+
+1. Solicita a cualquier miembro del equipo el `credentials.json` (OAuth Client ID del proyecto).  
+2. Coloca `credentials.json` en la raíz del repo.
+3. Ejecuta:
 
 ```bash
 uv run python generar_token_drive.py
 ```
+4. Inicia sesión con tu cuenta cuando se te redireccione.
+5. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
 
-El token resultante se guarda por defecto en `src/ETL/alertas_oficiales_tiempo_real/token_drive.json`.
+#### Opción B — Crear tu propio OAuth Client (Desktop app)
 
-Genera el token localmente con:
+1. En Google Cloud Console → APIs & Services → Credentials.
+2. Pasa la OAuth consent screen.
+3. En Google Cloud Console → APIs & Services → OAuth consent screen → Audience / Público
+4. En la sección Test Users: Add user: insertar tu email
+5. Create credentials → OAuth client ID.
+6. Application type: Desktop app.
+7. Descarga el JSON y guárdalo como `credentials.json` en la raíz del repo.
+8. Ejecutar:
 
 ```bash
-uv run python generar_token_drive.py
+python generar_token_drive.py
 ```
-
-El token se guarda en `src/ETL/alertas_oficiales_tiempo_real/token_drive.json`.
-
-La aplicación lee `token_drive.json` desde disco y lo refresca en ese mismo archivo cuando sea necesario.
-
-Para instrucciones sobre cómo ejecutar el contenedor y pasar variables/volúmenes, consulta la sección **Despliegue con Docker** al final de este README.
-
-Notas:
-- Asegúrate de tener `credentials.json` en la raíz del proyecto antes de ejecutar `generar_token_drive.py`.
-- Evita subir `token_drive.json` a repositorios públicos; gestiona el secreto mediante variables de entorno o un gestor de secretos en CI/CD.
+9. Inicia sesión con tu cuenta cuando se te redireccione.
+10. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
 
 ### Weights & Biases (W&B)
 
