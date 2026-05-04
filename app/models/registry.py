@@ -5,6 +5,7 @@ in memory. Supports DCRNN, LightGBM delay/end, LightGBM delta, and XGBoost alert
 import json
 import logging
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,13 +70,26 @@ class ModelRegistry:
         self.errors: dict[str, str] = {}
 
     def _download(self, entity: str, project: str, artifact_ref: str) -> Path:
-        api = wandb.Api()
         full_ref = f"{entity}/{project}/{artifact_ref}"
         logger.info("Downloading artifact: %s", full_ref)
-        artifact = api.artifact(full_ref)
-        tmpdir = tempfile.mkdtemp(prefix="wandb_")
-        artifact.download(root=tmpdir)
-        return Path(tmpdir)
+        last_exc = None
+        for attempt in range(3):
+            if attempt:
+                wait = 10 * attempt
+                logger.info("Rate limited, retrying %s in %ds (attempt %d/3)…", artifact_ref, wait, attempt + 1)
+                time.sleep(wait)
+            try:
+                api = wandb.Api(timeout=60)
+                artifact = api.artifact(full_ref)
+                tmpdir = tempfile.mkdtemp(prefix="wandb_")
+                artifact.download(root=tmpdir)
+                return Path(tmpdir)
+            except Exception as exc:
+                if "429" in str(exc) or "rate limit" in str(exc).lower():
+                    last_exc = exc
+                    continue
+                raise
+        raise last_exc
 
     # ── DCRNN ─────────────────────────────────────────────────────────────────
 
