@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import wandb
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 from models.dcrnn import SubwayDCRNN
@@ -54,7 +55,7 @@ RUTA_MODELO   = Path(__file__).parent / "artefactos" / "dcrnn_final.pth"
 WANDB_PROJECT  = "pd1-c2526-team5"
 WANDB_RUN_NAME = "dcrnn-final-trainval"
 
-NUM_EPOCHS   = 30
+NUM_EPOCHS   = 12
 OUT_HORIZONS = 3
 SEED         = 42
 
@@ -75,6 +76,8 @@ def main():
     print("=== 09 Entrenamiento Final DCRNN (Train + Val) ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Device: {device}")
+    # cudnn.benchmark=True es lento en GPUs con throttling (300 MHz): re-benchmarkea
+    # kernels en cada epoch y multiplica el tiempo de batch x1.5. Desactivado.
     fijar_semilla(SEED)
 
     # ── Cargar artefactos ─────────────────────────────────────────────────────
@@ -176,6 +179,8 @@ def main():
     xb0, yb0 = next(iter(tv_ld))
     validar_batch_vs_grafo(xb0.to(device), yb0.to(device), edge_index, edge_weight, tag="trainval")
     del xb0, yb0
+
+    print(f"batch_size: {bs} | AMP: desactivado | cudnn.benchmark: desactivado")
 
     for epoch in range(1, NUM_EPOCHS + 1):
         modelo.train()
