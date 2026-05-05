@@ -1,16 +1,15 @@
 """
-Script para la extracción y procesamiento de datos en tiempo real del metro
-de Nueva York (MTA) con el objetivo de calcular el retraso de los trenes
-respecto a sus horarios previstos.
+Extracción y procesamiento de datos en tiempo real del metro de Nueva York (MTA)
+para calcular el retraso de los trenes respecto a sus horarios previstos.
 
-FUENTES DE DATOS:
+Fuentes de datos:
     - API GTFS-Realtime MTA: tiempos de llegada/salida actuales de los trenes
       para todas las líneas del metro de Nueva York (A/C/E, B/D/F/M, G, J/Z,
       N/Q/R/W, L, 1-7/S y SIR).
     - GTFS Supplemented (S3 MTA): horarios previstos oficiales de cada tren
       en cada parada, descargado automáticamente desde un ZIP en la nube.
 
-PROCESO:
+Proceso:
     1. Se extraen los datos en tiempo real de la API para cada línea y se
        construye un DataFrame con el viaje, parada, hora de llegada/salida
        real y timestamp de la extracción.
@@ -20,7 +19,7 @@ PROCESO:
        filtrando predicciones futuras y ajustando viajes que cruzan la
        medianoche.
 
-OUTPUT:
+Output:
     DataFrame con el retraso real (en segundos) de cada tren en cada parada,
     junto con información del viaje, línea, dirección y tipo de día.
 """
@@ -39,10 +38,7 @@ import math
 import time
 
 
-# ─────────────────────────────────────────────
-#  Fuentes de datos MTA Real Time
-
-
+# URLs de los feeds GTFS-RT de la MTA por grupo de líneas
 FUENTES = {
     "ACES": {
         "url": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace",
@@ -79,18 +75,24 @@ FUENTES = {
 }
 
 
-
-# Datos a DataFrame
-
-
 def extraccion_linea(url, linea, reintentos=3):
     """
-    Extrae los datos de una línea
-    """
+    Descarga el feed GTFS-RT de una URL y extrae los datos de una línea concreta.
 
+    Realiza hasta `reintentos` intentos con backoff exponencial ante fallos de red.
+
+    Parámetros:
+        url       : URL del endpoint GTFS-RT de la MTA para el grupo de líneas.
+        linea     : Identificador de la línea a extraer (p. ej. "A", "1", "SIR").
+        reintentos: Número máximo de intentos antes de devolver lista vacía.
+
+    Retorna:
+        Lista de diccionarios, uno por actualización de parada, con los campos:
+        viaje_id, linea_id, parada_id, hora_llegada, hora_partida, timestamp.
+    """
     for intento in range(reintentos):
         try:
-            response = requests.get(url, timeout = 10)
+            response = requests.get(url, timeout=10)
             fuentes = gtfs_realtime_pb2.FeedMessage()
             fuentes.ParseFromString(response.content)
 
@@ -120,7 +122,7 @@ def extraccion_linea(url, linea, reintentos=3):
 
                             datos_linea.append(campos)
             return datos_linea
-        
+
         except Exception as e:
             if intento == reintentos - 1:
                 print(f"  [ERROR] Línea {linea} fallida tras {reintentos} intentos: {e}")
@@ -131,8 +133,12 @@ def extraccion_linea(url, linea, reintentos=3):
 
 def extraccion_datos():
     """
-    Repite la función de extracción para cada línea y unifica la información
-    de todas ellas en un DataFrame.
+    Itera sobre todos los grupos de líneas definidos en FUENTES y consolida
+    sus datos en un único DataFrame.
+
+    Retorna:
+        DataFrame con todas las actualizaciones de paradas de todas las líneas,
+        con columnas: viaje_id, linea_id, parada_id, hora_llegada, hora_partida, timestamp.
     """
     todos_los_datos = []
 
@@ -144,30 +150,36 @@ def extraccion_datos():
     return pd.DataFrame(todos_los_datos)
 
 
-
-#  Funciones auxiliares
-
 def conversion_hora_NYC(df):
+    """
+    Convierte las columnas de fecha/hora del DataFrame a la zona horaria de Nueva York.
 
+    Parámetros:
+        df : DataFrame con columnas hora_llegada, hora_partida y timestamp en UTC.
+
+    Retorna:
+        DataFrame con esas tres columnas convertidas a 'America/New_York'.
     """
-    Para las variables de tipo datetime, modifica el valor a la hora local de NY
-    """
-    
     for col in ['hora_llegada', 'hora_partida', 'timestamp']:
         df[col] = pd.to_datetime(df[col], utc=True).dt.tz_convert('America/New_York')
     return df
 
 def dia_segun_fecha_y_formato(df):
-
     """
-    Según el dia en el que se ha hecho la extracción, crea una nueva variable
-    que lo clasifica en 3 grupos (Weekday, Saturday, Sunday).
+    Clasifica el día de la extracción en tres categorías (Weekday, Saturday, Sunday)
+    y añade columnas auxiliares de día de la semana.
 
-    También se extrae si es fin de semana y que día de la semana es numéricamente
+    Columnas añadidas:
+        dia        : 'Weekday', 'Saturday' o 'Sunday'.
+        dow        : Número de día de la semana (0=lunes, 6=domingo).
+        is_weekend : 1 si es sábado o domingo, 0 en caso contrario.
 
-    Posteriormente cambia el formato de las horas y lo convierte a string.
+    Parámetros:
+        df : DataFrame con columna timestamp en hora de Nueva York.
+
+    Retorna:
+        DataFrame con las nuevas columnas añadidas.
     """
-
     df['dia'] = df['timestamp'].dt.strftime("%A").apply(
         lambda x: 'Weekday' if x not in ('Saturday', 'Sunday') else x
     )
@@ -178,16 +190,25 @@ def dia_segun_fecha_y_formato(df):
     return df
 
 def direccion_tren(df):
-
     """
-    Según el id de cada parada, se crea una nueva columna que contiene la dirección del tren (0,1)
-    """
+    Determina la dirección de circulación del tren a partir del sufijo del stop_id.
 
+    El GTFS de la MTA usa 'N' (norte) o 'S' (sur) como último carácter del stop_id.
+
+    Columnas añadidas:
+        direccion : 1 para norte, 0 para sur, NaN si no se puede determinar.
+
+    Parámetros:
+        df : DataFrame con columna parada_id.
+
+    Retorna:
+        DataFrame con la columna direccion añadida (tipo Int64 nullable).
+    """
     norte = (df['parada_id'].str[-1] == 'N')
     sur = (df['parada_id'].str[-1] == 'S')
 
-    df.loc[norte, 'direccion'] = 1 #Dirección Norte
-    df.loc[sur, 'direccion'] = 0 #Dirección Sur
+    df.loc[norte, 'direccion'] = 1
+    df.loc[sur, 'direccion'] = 0
 
     df['direccion'] = df['direccion'].astype('Int64')
 
@@ -195,9 +216,17 @@ def direccion_tren(df):
 
 
 def normalizar_horas(columna):
-
     """
-    Para horas mayores a 24 horas, se convierte a hora del día siguiente
+    Normaliza horas superiores a 23:59 convirtiéndolas al equivalente del día siguiente.
+
+    El GTFS puede codificar horas como "25:30:00" para las 01:30 del día siguiente.
+    Esta función las convierte al formato estándar HH:MM:SS de 0 a 23.
+
+    Parámetros:
+        columna : Serie de pandas con strings en formato HH:MM:SS.
+
+    Retorna:
+        Serie con las horas normalizadas en formato HH:MM:SS.
     """
     def ajustar(hora):
         if pd.isna(hora):
@@ -205,36 +234,46 @@ def normalizar_horas(columna):
         partes = hora.split(':')
         h = int(partes[0]) % 24
         return f"{h:02d}:{partes[1]}:{partes[2]}"
- 
+
     return columna.apply(ajustar)
 
 def hora_a_segundos(hora):
+    """
+    Convierte una hora en formato HH:MM:SS a segundos desde medianoche.
 
+    Parámetros:
+        hora : String con formato HH:MM:SS, o valor NaN.
+
+    Retorna:
+        Entero con los segundos totales, o np.nan si la entrada es NaN.
     """
-    Dado un string con una hora, se calculan los segundos totales
-    """
-    if pd.isna(hora): 
+    if pd.isna(hora):
         return np.nan
-    
+
     partes = hora.split(':')
 
     return int(partes[0]) * 3600 + int(partes[1]) * 60 + int(partes[2])
 
 
 def hora_posterior(hora1, hora2):
+    """
+    Comprueba si hora1 es posterior a hora2, teniendo en cuenta cruces de medianoche.
 
+    Si la diferencia supera las 12 horas, se asume que hay un cruce de medianoche
+    y se ajusta la comparación en consecuencia.
+
+    Parámetros:
+        hora1 : String HH:MM:SS de la primera hora.
+        hora2 : String HH:MM:SS de la segunda hora.
+
+    Retorna:
+        True si hora1 es posterior a hora2, False en caso contrario.
     """
-    Comprueba si la hora dada como primer parámetro es mayor
-    segunda.
-    """
-    
     s1 = hora_a_segundos(hora1)
     s2 = hora_a_segundos(hora2)
     dif = s1 - s2
 
-    # Tenemos en cuenta posibles primeras horas del día siguiente (00:15) y
-    # asumimos que si la diferencia supera las 12 horas es cruce de media noche
-    if dif > 43200:   
+    if dif > 43200:
         dif -= 86400
     elif dif < -43200:
         dif += 86400
@@ -243,7 +282,16 @@ def hora_posterior(hora1, hora2):
 
 def filter_delay_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filtro suave de outliers: delays fuera de +/- 2.5h suelen ser ruido (pero ajustable)
+    Elimina filas cuyo retraso supere el umbral de ±2.5 horas (±9000 segundos).
+
+    Los valores extremos suelen ser ruido de la API o errores de emparejamiento
+    entre el feed RT y el horario estático.
+
+    Parámetros:
+        df : DataFrame con columna 'delay' en segundos.
+
+    Retorna:
+        DataFrame sin las filas consideradas outliers.
     """
     antes = len(df)
     mask = df["delay"].isna() | df["delay"].between(-9000, 9000)
@@ -255,7 +303,22 @@ def filter_delay_outliers(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def hora_ciclica(df):
-    """Codifica la hora de llegada como coordenadas cíclicas (sin/cos).""" 
+    """
+    Codifica la hora de llegada como par de coordenadas cíclicas (seno y coseno).
+
+    Esta representación evita la discontinuidad entre las 23:00 y las 00:00,
+    permitiendo que los modelos de ML traten la hora como una variable continua.
+
+    Columnas añadidas:
+        hour_sin : Seno de la hora normalizada al ciclo de 24 horas.
+        hour_cos : Coseno de la hora normalizada al ciclo de 24 horas.
+
+    Parámetros:
+        df : DataFrame con columna hora_llegada de tipo datetime.
+
+    Retorna:
+        DataFrame con las columnas hour_sin y hour_cos añadidas.
+    """
     hour_float = df["hora_llegada"].dt.hour.astype(float)
     df["hour_sin"] = hour_float.apply(lambda h: math.sin(2 * math.pi * h / 24) if pd.notna(h) else None)
     df["hour_cos"] = hour_float.apply(lambda h: math.cos(2 * math.pi * h / 24) if pd.notna(h) else None)
@@ -263,27 +326,32 @@ def hora_ciclica(df):
     return df
 
 
-
-#  DataFrame tiempo real
-
-
-
 def creacion_df_tiempo_real():
-
     """
-    Creación de dataframe de tiempo real
+    Construye el DataFrame de tiempo real con todos los trenes en circulación.
+
+    Realiza la extracción, conversión de zona horaria, clasificación del día,
+    asignación de dirección y calcula los segundos desde medianoche para cada
+    hora de llegada.
+
+    Retorna:
+        DataFrame limpio con columnas: viaje_id, linea_id, parada_id,
+        hora_llegada, hora_partida, timestamp, dia, dow, is_weekend,
+        direccion, segundos_reales.
+
+    Lanza ValueError si no se obtuvieron datos de ninguna línea.
     """
     df = extraccion_datos()
 
     if df.empty:
         raise ValueError("No se obtuvieron datos de tiempo real de ninguna línea.")
-    
+
     df = conversion_hora_NYC(df)
     df = dia_segun_fecha_y_formato(df)
     df = direccion_tren(df)
 
-    # Solo descartamos filas sin hora_llegada (necesaria para calcular delay).
-    # hora_partida puede ser None en primera/última parada del viaje.
+    # Se descartan filas sin hora_llegada (necesaria para calcular el delay).
+    # hora_partida puede ser None en la primera o última parada del viaje.
     df = df.dropna(subset=['hora_llegada', 'viaje_id', 'parada_id', 'linea_id'])
 
     df['segundos_reales'] = (df['hora_llegada'].dt.hour * 3600 +
@@ -294,14 +362,18 @@ def creacion_df_tiempo_real():
     return df
 
 
-
-#  DataFrame horarios previstos
 def creacion_df_previsto():
-
     """
-    Creación de dataframe de horarios previstos
-    """
+    Descarga el GTFS suplementado de la MTA y construye el DataFrame de horarios previstos.
 
+    El ZIP se descarga desde S3 y se extrae el archivo stop_times.txt. Se normalizan
+    las horas superiores a 23:59, se extrae el tipo de día del trip_id y se calcula
+    segundos_previstos para cada parada.
+
+    Retorna:
+        DataFrame con columnas: trip_id, stop_id, arrival_time, departure_time,
+        stop_sequence, day, segundos_previstos (entre otras del GTFS).
+    """
     url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
 
     with urllib.request.urlopen(url) as response:
@@ -324,10 +396,10 @@ def creacion_df_previsto():
         with z.open("stop_times.txt") as f:
             df = pd.read_csv(f)
 
-    #Día en el que se lleva a cabo el servivio, viene dado como parte del trip_id
+    # El tipo de día de servicio viene codificado en el trip_id (Weekday, Saturday, Sunday)
     df['day'] = df['trip_id'].str.split('-').str[-2]
 
-    #Modificamos trip_id para que tenga el mismo formato que el id del otro dataframe
+    # Adaptar el trip_id al mismo formato que el feed en tiempo real
     df['trip_id'] = df['trip_id'].str.split('_', n=1).str[-1]
 
     df['arrival_time'] = normalizar_horas(df['arrival_time'])
@@ -340,31 +412,31 @@ def creacion_df_previsto():
 
 def calcular_features_rt(df, df_schedule=None):
     """
-    Calcula features derivados de la secuencia del viaje y del histórico
-    reciente por línea, necesarios para inferencia en tiempo real.
+    Calcula features derivadas de la secuencia del viaje y del histórico reciente
+    por línea, necesarias para la inferencia en tiempo real.
 
-    Genera:
-      - lagged_delay_1, lagged_delay_2: delay en las 1-2 paradas previas
-        del mismo viaje.
-      - route_rolling_delay: media móvil del delay por línea (últimos 30 min).
-      - actual_headway_seconds: segundos entre este tren y el anterior en
-        la misma parada y dirección.
-      - stops_to_end: paradas restantes hasta el final del viaje.
-      - scheduled_time_to_end: segundos programados hasta la última parada.
-    
+    Features generadas:
+        lagged_delay_1, lagged_delay_2    : Retraso en las 1-2 paradas previas del viaje.
+        route_rolling_delay               : Media móvil del delay por línea (ventana de 5 obs.).
+        actual_headway_seconds            : Segundos entre este tren y el anterior en la misma parada.
+        stops_to_end                      : Paradas restantes hasta el final del viaje.
+        scheduled_time_to_end             : Segundos programados hasta la última parada.
+
     Parámetros:
-      - df: DataFrame filtrado con paradas ya pasadas
-      - df_schedule: DataFrame del schedule completo (sin filtrar). Si se proporciona,
-        se usa para calcular max_seq desde el schedule completo en lugar de usar
-        solo las paradas pasadas en df. Esto corrige el bug donde max_seq era solo
-        el máximo de las paradas pasadas observadas en el feed RT.
+        df          : DataFrame filtrado con las paradas ya pasadas.
+        df_schedule : DataFrame del schedule completo sin filtrar. Si se proporciona,
+                      se usa para calcular max_seq desde el schedule completo en lugar
+                      de solo las paradas pasadas del feed RT, evitando subestimar
+                      stops_to_end.
+
+    Retorna:
+        DataFrame enriquecido con las nuevas columnas de features.
     """
     if df.empty:
         return df
 
-    # 1) Lagged delays dentro del mismo viaje.
-    # Se hace forward-fill del delay por viaje antes del shift para que una
-    # parada no-matched (delay=NaN) no rompa la cadena de lags de las siguientes.
+    # Lags de retraso dentro del mismo viaje con forward-fill previo para no
+    # romper la cadena cuando una parada no tiene match de schedule (delay=NaN).
     df = df.sort_values(['viaje_id', 'segundos_reales']).reset_index(drop=True)
     _delay_filled = df.groupby('viaje_id')['delay'].transform('ffill')
     same_trip_1 = df['viaje_id'] == df['viaje_id'].shift(1)
@@ -372,7 +444,7 @@ def calcular_features_rt(df, df_schedule=None):
     df['lagged_delay_1'] = _delay_filled.shift(1).where(same_trip_1, np.nan)
     df['lagged_delay_2'] = _delay_filled.shift(2).where(same_trip_2, np.nan)
 
-    # 2) Rolling delay por línea (ventana temporal 30 min sobre hora_llegada)
+    # Media móvil del delay por línea y dirección (ventana de 5 observaciones, shift(1))
     df_sorted = (
         df[['linea_id', 'direccion', 'segundos_reales', 'delay']]
         .sort_values(['linea_id', 'direccion', 'segundos_reales'])
@@ -392,7 +464,7 @@ def calcular_features_rt(df, df_schedule=None):
         .reindex(df.index)
     )
 
-    # 3) Headway: tiempo desde el tren anterior en (parada_id)
+    # Headway: diferencia de tiempo entre trenes consecutivos en la misma parada
     df_hw = (
         df[['parada_id', 'segundos_reales']]
         .sort_values(['parada_id', 'segundos_reales'])
@@ -410,14 +482,10 @@ def calcular_features_rt(df, df_schedule=None):
         .reindex(df.index)
     )
 
-    # 4) stops_to_end y scheduled_time_to_end por viaje
-    # BUG FIX: Si df_schedule está disponible, usar el schedule completo para calcular
-    # max_seq en lugar de usar solo el df filtrado (que solo contiene paradas pasadas).
-    # De lo contrario, max_seq sería solo el máximo de las paradas pasadas observadas
-    # en el feed RT, no el final real del viaje.
-    
+    # stops_to_end y scheduled_time_to_end por viaje.
+    # Si df_schedule está disponible, se usa el schedule completo para evitar
+    # que max_seq sea solo el máximo de las paradas pasadas observadas en el feed RT.
     if df_schedule is not None and not df_schedule.empty:
-        # Calcular desde el schedule completo (df_schedule), usando trip_id como viaje_id
         final_por_viaje = (
             df_schedule.groupby('trip_id').agg(
                 max_seq=('stop_sequence', 'max'),
@@ -428,20 +496,18 @@ def calcular_features_rt(df, df_schedule=None):
             .set_index('viaje_id')
         )
     else:
-        # Fallback: usar df (método anterior, pero con los datos filtrados)
         final_por_viaje = df.groupby('viaje_id').agg(
             max_seq=('stop_sequence', 'max'),
             final_secs=('segundos_previstos', 'max'),
         )
-    
+
     df = df.merge(final_por_viaje, left_on='viaje_id', right_index=True, how='left')
     df['stops_to_end'] = df['max_seq'] - df['stop_sequence']
     df['scheduled_time_to_end'] = df['final_secs'] - df['segundos_previstos']
     df = df.drop(columns=['max_seq', 'final_secs'])
 
-    # Cuando el join con stop_times falla (trip_id no está en el schedule),
-    # stops_to_end y scheduled_time_to_end quedan NaN. Usar los valores calculados
-    # directamente del feed RT como fallback.
+    # Fallback: si el join con stop_times falla, usar los valores calculados
+    # directamente del feed RT (columnas stops_to_end_rt / scheduled_time_to_end_rt).
     if 'stops_to_end_rt' in df.columns:
         mask = df['stops_to_end'].isna()
         df.loc[mask, 'stops_to_end'] = df.loc[mask, 'stops_to_end_rt']
@@ -452,23 +518,36 @@ def calcular_features_rt(df, df_schedule=None):
 
     return df
 
-#  Unión DataFrames
-def union_dataframes(df1, df2, inference_mode=False):
 
+def union_dataframes(df1, df2, inference_mode=False):
     """
-    Une los DataFrames de tiempo real y horarios previstos, calcula el delay
+    Une los DataFrames de tiempo real y horarios previstos, calcula el retraso
     y aplica las transformaciones finales.
 
-    inference_mode: si True, para trenes sin paradas pasadas (todas futuras)
-    conserva la parada más inmediata como proxy de posición actual.
-    """
+    El proceso de merge es progresivo:
+        1. Merge principal por (viaje_id, parada_id, día de servicio).
+        2. Fallback ignorando el día de servicio para filas sin match.
+        3. Segundo fallback normalizando el sufijo de shape del trip_id.
 
-    # Intentar primero merge que respete el día de servicio (Weekday/Saturday/Sunday)
-    # para evitar elegir el calendario equivocado cuando exista la misma
-    # (trip_id, stop_id) repetido para varios periodos. df1 tiene la columna
-    # 'dia' (creada en creacion_df_tiempo_real) y df2 tiene 'day' extraída del
-    # trip_id en creacion_df_previsto, por lo que podemos hacer un merge
-    # izquierdo usando esa columna.
+    Tras el merge:
+        - Se calcula delay = segundos_reales - segundos_previstos.
+        - Se ajusta para cruces de medianoche.
+        - Se eliminan duplicados conservando el horario más próximo (menor |delay|).
+        - Se descartan paradas futuras (timestamp < hora_llegada).
+        - Se aplican filtros de outliers y se calculan features adicionales.
+
+    Parámetros:
+        df1            : DataFrame de tiempo real (salida de creacion_df_tiempo_real).
+        df2            : DataFrame de horarios previstos (salida de creacion_df_previsto).
+        inference_mode : Si True, conserva la parada más inmediata para trenes
+                         cuyas paradas son todas futuras (útil en tiempo real).
+
+    Retorna:
+        DataFrame con delay calculado y columnas auxiliares eliminadas, listo
+        para su uso en el pipeline de inferencia o entrenamiento.
+    """
+    # Merge principal respetando el día de servicio para evitar colisiones de
+    # (trip_id, stop_id) entre distintos calendarios (WKD, SAT, SUN).
     df = pd.merge(
         df1,
         df2,
@@ -479,17 +558,12 @@ def union_dataframes(df1, df2, inference_mode=False):
         indicator=True
     )
 
-    # Para las filas que no encontraron match por día, intentar un merge de
-    # fallback ignorando el campo 'day' (comportamiento anterior). Solo rellenar
-    # las columnas de schedule cuando estaban ausentes en el merge por día,
-    # preservando así los matches por día cuando existan.
+    # Fallback sin día de servicio para filas sin match en el merge principal.
     missing_mask = df['_merge'] == 'left_only'
     if missing_mask.any():
-        # Extraer las filas no-matcheadas directamente del DataFrame fusionado
-        # Esto evita problemas de desalineación de índices entre `df` y `df1`.
         df1_missing = df.loc[missing_mask, df1.columns].copy()
         df1_missing['_row_id'] = df1_missing.index
-        
+
         fallback = pd.merge(
             df1_missing,
             df2,
@@ -499,9 +573,7 @@ def union_dataframes(df1, df2, inference_mode=False):
             suffixes=('', '_fb')
         )
 
-        # Si un mismo (viaje_id, parada_id) tiene varias filas de schedule,
-        # nos quedamos con la primera coincidencia estable por fila original.
-        # Así cada índice left-only recibe como mucho una fila de fallback.
+        # Por cada fila original sin match, conservar solo la primera coincidencia estable.
         fallback = (
             fallback
             .sort_values(['_row_id'])
@@ -509,30 +581,24 @@ def union_dataframes(df1, df2, inference_mode=False):
             .set_index('_row_id')
         )
 
-        # Rellenar columnas de schedule solo donde estaban NaN
         sched_cols = [c for c in fallback.columns if c not in df1.columns]
         for col in sched_cols:
             if col in df.columns:
-                # Rellenar solo las filas que fueron left_only
                 df.loc[df1_missing.index, col] = fallback[col].reindex(df1_missing.index).values
             else:
-                # Añadir columna nueva (solo para filas missing)
                 series = pd.Series(index=df.index, dtype=fallback[col].dtype if col in fallback.columns else object)
                 series.loc[df1_missing.index] = fallback[col].reindex(df1_missing.index).values
                 df[col] = series
 
-        # Limpiar columnas auxiliares del fallback
         fb_cols = [c for c in df.columns if c.endswith('_fb')]
         if fb_cols:
             df = df.drop(columns=fb_cols)
 
-    # Limpiar columna de indicador de merge
     df = df.drop(columns=['_merge'])
 
-    # Tercer fallback: normalizar shape suffix del trip_id.
-    # La MTA a veces publica trips sin shape (ej. '025900_A..N') que en stop_times
-    # existen con shape (ej. '025900_A..N09X011'). Stripeamos el sufijo numérico
-    # tras N/S en ambos lados y reintentamos el merge solo para las filas sin match.
+    # Tercer fallback: normalizar el sufijo de shape del trip_id.
+    # La MTA a veces publica trips sin shape ('025900_A..N') que en stop_times
+    # existen con shape ('025900_A..N09X011').
     _shape_re = re.compile(r'(?<=[NS])\d+\w*$')
     still_missing = df['trip_id'].isna()
     if still_missing.any():
@@ -571,20 +637,17 @@ def union_dataframes(df1, df2, inference_mode=False):
         if fn_cols:
             df = df.drop(columns=fn_cols, errors='ignore')
 
-    # Marcar trenes no programados: no encontraron match en el schedule
+    # Trenes sin match en ningún calendario del schedule
     df['is_unscheduled'] = df['trip_id'].isna()
 
-    # Calcula el retraso: tiempo de llegada predicho/real menos el tiempo programado
+    # Cálculo del retraso en segundos
     df['delay'] = df['segundos_reales'] - df['segundos_previstos']
 
-    # Ajuste para viajes que cruzan medianoche
+    # Ajuste para viajes que cruzan la medianoche
     df.loc[df['delay'] > 43200, 'delay'] -= 86400
     df.loc[df['delay'] < -43200, 'delay'] += 86400
 
-    # El GTFS suplementado repite cada (trip_id, stop_id) una vez por período de
-    # calendario (WKD, SAT, SUN, etc.), multiplicando las filas. Se eliminan
-    # duplicados conservando la entrada cuyo horario programado más se acerca a
-    # la llegada real (menor |delay|), que es la del período activo hoy.
+    # Eliminar duplicados de (viaje_id, parada_id) conservando el match con menor |delay|
     if df.duplicated(subset=['viaje_id', 'parada_id']).any():
         df['_abs_delay'] = df['delay'].abs().fillna(np.inf)
         df = (
@@ -593,8 +656,7 @@ def union_dataframes(df1, df2, inference_mode=False):
               .drop(columns=['_abs_delay'])
         )
 
-    # Si el mejor match de calendario tiene |delay| > 1h, es casi seguro un
-    # falso match (trip_id colisionado de otro servicio). Se trata como no programado.
+    # Si el mejor match tiene |delay| > 1h, es probablemente un falso positivo
     MAX_DELAY_MATCH = 3600
     bad_match = (~df['is_unscheduled']) & (df['delay'].abs() > MAX_DELAY_MATCH)
     if bad_match.any():
@@ -603,13 +665,12 @@ def union_dataframes(df1, df2, inference_mode=False):
         df.loc[bad_match, 'is_unscheduled'] = True
         print(f"  [WARN] {bad_match.sum()} filas marcadas unscheduled (|delay|>{MAX_DELAY_MATCH}s)")
 
-    # Descartar paradas futuras: solo nos interesan las ya pasadas o en curso.
+    # Conservar solo paradas ya pasadas o en curso
     df_past = df[df['timestamp'] >= df['hora_llegada']].copy()
 
     if inference_mode:
-        # Para trenes en tránsito (todas sus paradas son futuras), conservar la
-        # parada más inmediata como proxy de posición. Sin esto, el tren queda
-        # con 0 filas y se reporta falsamente como "finalizando recorrido".
+        # En modo inferencia, conservar la parada más inmediata de trenes en tránsito
+        # cuyas paradas son todas futuras, para no perder el tren del cómputo.
         trips_with_past = set(df_past['viaje_id']) if not df_past.empty else set()
         trips_no_past = set(df['viaje_id']) - trips_with_past
         if trips_no_past:
@@ -625,7 +686,6 @@ def union_dataframes(df1, df2, inference_mode=False):
     else:
         df = df_past
 
-    #Filtro para delays con valores masivos y transformacion del día de la semana a valor numérico
     df = filter_delay_outliers(df)
     df = hora_ciclica(df)
     df = calcular_features_rt(df, df_schedule=df2)
@@ -645,7 +705,7 @@ if __name__ == "__main__":
 
     df_real_time = None
     df_previsto = None
-    
+
     try:
         print("\nExtrayendo horarios de trenes en tiempo real...")
         df_real_time = creacion_df_tiempo_real()
@@ -670,4 +730,4 @@ if __name__ == "__main__":
 
     ruta = "/tmp/realtime_data.parquet"
     df_final.to_parquet(ruta, index=False)
-    print(f"\nGuardado en {ruta} ({ruta.stat().st_size / 1024:.1f} KB, {len(df_final)} filas)")
+    print(f"\nGuardado en {ruta} ({len(df_final)} filas)")

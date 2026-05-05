@@ -1,11 +1,30 @@
 """
-Extraccion de alertas oficiales de la MTA en tiempo real via Gmail API.
+Extracción de alertas oficiales de la MTA en tiempo real mediante la API de Gmail.
 
-Lee los correos con etiqueta 'mta_alerts' recibidos en los ultimos 30 minutos,
-parsea el HTML del cuerpo y extrae: categoria, lineas afectadas, motivo,
-ubicacion y un fragmento de texto.
+Lee los correos con la etiqueta 'mta_alerts' recibidos en los últimos 30 minutos,
+parsea el cuerpo HTML de cada correo y extrae los siguientes campos:
+  - Categoría de la alerta (retraso, cambio de servicio, reanudación, etc.)
+  - Líneas de metro afectadas
+  - Motivo del incidente
+  - Ubicación aproximada
+  - Fragmento de texto limpio (máximo 500 caracteres)
 
-Resultado: mta_dataset.csv con las alertas procesadas.
+El resultado se sube como Parquet a MinIO en la ruta:
+  grupo5/raw/official_alerts/DataFrame_Alertas_TiempoReal.parquet
+
+Dependencias:
+  - google-auth, google-auth-oauthlib, google-api-python-client : autenticación y acceso a Gmail
+  - beautifulsoup4 : parseo del HTML del cuerpo del correo
+  - pandas         : construcción del DataFrame de salida
+  - src.common.minio_client.upload_df_parquet : subida a MinIO
+
+Variables de entorno requeridas:
+  - MINIO_ACCESS_KEY
+  - MINIO_SECRET_KEY
+
+Nota: La primera ejecución abre un flujo OAuth interactivo y guarda el token en
+token.json. En ejecuciones posteriores el token se reutiliza o se refresca
+automáticamente si ha expirado.
 """
 
 import os
@@ -30,9 +49,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 CREDENTIALS_PATH = BASE_DIR / "credentials.json"
 TOKEN_PATH = BASE_DIR / "token.json"
 
+
 def get_gmail_service():
-    """Autenticacion con Gmail API. Usa token.json si existe;
-    si no, lanza el flujo OAuth interactivo y lo guarda."""
+    """
+    Autentica con la API de Gmail y devuelve el objeto de servicio.
+
+    Usa token.json si existe y es válido; si el token ha expirado lo refresca
+    con el refresh_token; si no existe token alguno, lanza el flujo OAuth
+    interactivo (abre el navegador) y guarda el nuevo token en token.json.
+    """
     creds = None
 
     if TOKEN_PATH.exists():
@@ -45,30 +70,27 @@ def get_gmail_service():
             creds = flow.run_local_server(port=0)
         with open(TOKEN_PATH, 'w') as token:
             token.write(creds.to_json())
-    '''
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            BASE_DIR = Path(__file__).resolve().parent
-            flow = InstalledAppFlow.from_client_secrets_file(str(BASE_DIR / "credentials.json"), SCOPES)
-            #flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    '''
     return build('gmail', 'v1', credentials=creds)
 
 
 def parse_mta_body(html_content):
-    """Parsea el cuerpo HTML de un correo de la MTA y extrae:
-    - lineas afectadas (ej: 'A, C, E')
-    - motivo del aviso (puertas, senales, clima, etc.)
-    - categoria (retraso, cambio de servicio, etc.)
-    - ubicacion aproximada
-    - fragmento de texto limpio (max 500 chars)
+    """
+    Parsea el cuerpo HTML de un correo de la MTA y extrae información estructurada.
+
+    Extrae los siguientes campos:
+      - lines    : líneas de metro afectadas (ej. 'A, C, E')
+      - reason   : motivo del incidente (puertas, señales, clima, mantenimiento, etc.)
+      - category : categoría del aviso (Delay, Service Change, Planned Work, etc.)
+      - location : ubicación aproximada extraída del texto
+      - snippet  : fragmento de texto limpio de hasta 500 caracteres
+
+    Parámetros
+    ----------
+    html_content : Cadena con el HTML del cuerpo del correo.
+
+    Devuelve
+    --------
+    Tupla (lines, reason, category, location, clean_text).
     """
     soup = BeautifulSoup(html_content, 'html.parser')
 
@@ -80,7 +102,7 @@ def parse_mta_body(html_content):
     clean_text = re.sub(r'\s+', ' ', text).strip()
     text_lower = clean_text.lower()
 
-    # 1) Categoria del aviso
+    # Categoría del aviso
     if any(word in text_lower for word in ["resumed", "regular service", "resolved"]):
         category = "Service Resumed"
     elif "preparing for" in text_lower and "storm" in text_lower:
@@ -94,11 +116,11 @@ def parse_mta_body(html_content):
     else:
         category = "Info/Other"
 
-    # 2) Lineas de metro afectadas
+    # Líneas de metro afectadas
     line_pattern = r'\b([1-7]|A|B|C|D|E|F|G|J|L|M|N|Q|R|S|W|Z)\b'
     lines = sorted(list(set(re.findall(line_pattern, clean_text))))
 
-    # 3) Motivo especifico
+    # Motivo específico del incidente
     reason = "Unknown"
     if "door" in text_lower:
         reason = "Mechanical (Doors)"
@@ -111,7 +133,7 @@ def parse_mta_body(html_content):
     elif "winter storm" in text_lower:
         reason = "Weather"
 
-    # 4) Ubicacion (busca patrones tipo "at/from/to/near + nombre")
+    # Ubicación: busca patrones del tipo "at/from/to/near + nombre"
     location = "Multiple/System-wide"
     loc_match = re.search(r'(?:at|from|to|near)\s+([A-Z][a-z0-9]+(?:\s[A-Z][a-z0-9]+)*)', clean_text)
     if loc_match:
@@ -121,17 +143,21 @@ def parse_mta_body(html_content):
 
 
 def main():
+    """
+    Función principal: obtiene el servicio de Gmail, itera sobre los correos
+    de los últimos 30 minutos con etiqueta 'mta_alerts', parsea cada uno y
+    sube el DataFrame resultante a MinIO como Parquet.
+    """
     service = get_gmail_service()
     data_log = []
     page_token = None
 
-    # Punto de corte: solo correos de los ultimos 30 minutos
+    # Solo se procesan correos de los últimos 30 minutos
     cutoff_utc = datetime.now(timezone.utc) - timedelta(minutes=30)
 
     print("Extrayendo correos de alertas MTA de los ultimos 30 minutos...")
 
     while True:
-        # Buscar correos con etiqueta mta_alerts de los ultimos 30 min
         results = service.users().messages().list(
             userId='me',
             q='label:mta_alerts newer_than:30m',
@@ -153,12 +179,14 @@ def main():
                 # internalDate viene en milisegundos epoch (UTC)
                 timestamp_utc = pd.to_datetime(int(m['internalDate']), unit='ms', utc=True)
                 timestamp_ny = timestamp_utc.tz_convert('America/New_York')
-                # Descartamos si esta fuera de la ventana de 30 min
+
+                # Descartamos correos fuera de la ventana de 30 minutos
                 if timestamp_utc.to_pydatetime() < cutoff_utc:
                     continue
 
-                # Extraer la parte HTML del correo (recursivo por si es multipart)
+                # Extrae la parte HTML del correo (recursivo por si es multipart)
                 def get_html_part(payload):
+                    """Extrae recursivamente la parte text/html del payload de un mensaje de Gmail."""
                     if payload.get('mimeType') == 'text/html':
                         data = payload.get('body', {}).get('data')
                         if not data:
@@ -175,11 +203,10 @@ def main():
                 if not html_body:
                     continue
 
-                # Parsear el HTML y extraer campos
                 lines, reason, category, location, clean_text = parse_mta_body(html_body)
 
                 data_log.append({
-                    'timestamp': timestamp_ny,   
+                    'timestamp': timestamp_ny,
                     'category': category,
                     'lines': lines,
                     'reason': reason,
@@ -195,13 +222,12 @@ def main():
         if not page_token:
             break
 
-    # Construir DataFrame y exportar
     if data_log:
         df = pd.DataFrame(data_log).sort_values(by='timestamp', ascending=False)
 
         # Eliminar duplicados por ID de correo
         df = df.drop_duplicates(subset=['gmail_id'])
-        
+
         ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY')
         SECRET_KEY = os.getenv('MINIO_SECRET_KEY')
         upload_df_parquet(ACCESS_KEY, SECRET_KEY, 'grupo5/raw/official_alerts/DataFrame_Alertas_TiempoReal.parquet', df)

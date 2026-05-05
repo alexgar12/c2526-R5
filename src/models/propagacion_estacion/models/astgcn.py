@@ -1,6 +1,14 @@
 """
-Modelo ASTGCN (Attention-based Spatio-Temporal Graph Convolutional Network) para
-predicción de retrasos en la red de metro de Nueva York.
+Implementación del modelo ASTGCN (Attention-based Spatio-Temporal Graph
+Convolutional Network) para predicción de retrasos en la red de metro de
+Nueva York.
+
+Descripción
+-----------
+ASTGCN extiende STGCN añadiendo mecanismos de atención temporal y espacial
+que ponderan dinámicamente los pasos de tiempo y los nodos del grafo antes
+de aplicar la convolución de Chebyshev. El modelo se compone de dos bloques
+ASTGCNBlock seguidos de una convolución de salida y una capa FC.
 
 Clases exportadas
 -----------------
@@ -10,6 +18,10 @@ Funciones auxiliares exportadas
 --------------------------------
 calcular_scaled_laplacian        : normaliza el Laplaciano del grafo al rango [-1, 1].
 calcular_polinomios_chebyshev    : precalcula los polinomios de Chebyshev T_0..T_{K-1}.
+
+Dependencias
+------------
+- numpy, torch, torch.nn, torch.nn.functional
 """
 
 import numpy as np
@@ -18,12 +30,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Utilidades de grafo
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 def calcular_scaled_laplacian(adj_matrix: np.ndarray) -> np.ndarray:
-    """Laplaciano simétrico normalizado escalado a [-1, 1] (para Chebyshev)."""
+    """
+    Calcula el Laplaciano simétrico normalizado escalado al rango [-1, 1].
+
+    El escalado a [-1, 1] es necesario para que los polinomios de Chebyshev
+    sean numéricamente estables durante el entrenamiento.
+
+    Parámetros
+    ----------
+    adj_matrix : np.ndarray (N, N) — matriz de adyacencia ponderada
+
+    Devuelve
+    --------
+    np.ndarray (N, N) de tipo float32
+    """
     adj = adj_matrix.astype(np.float32).copy()
     np.fill_diagonal(adj, 0.0)
     degree = np.sum(adj, axis=1)
@@ -40,7 +65,20 @@ def calcular_scaled_laplacian(adj_matrix: np.ndarray) -> np.ndarray:
 
 
 def calcular_polinomios_chebyshev(scaled_laplacian: np.ndarray, K: int) -> list[torch.Tensor]:
-    """Precalcula los K polinomios de Chebyshev como tensores."""
+    """
+    Precalcula los K primeros polinomios de Chebyshev como tensores PyTorch.
+
+    Usa la recurrencia: T_k = 2*L*T_{k-1} - T_{k-2}, con T_0=I y T_1=L.
+
+    Parámetros
+    ----------
+    scaled_laplacian : np.ndarray (N, N) — Laplaciano escalado
+    K                : int — número de polinomios a calcular
+
+    Devuelve
+    --------
+    list de K tensores (N, N) de tipo float32
+    """
     N = scaled_laplacian.shape[0]
     polys = [np.eye(N, dtype=np.float32)]
     if K > 1:
@@ -50,19 +88,41 @@ def calcular_polinomios_chebyshev(scaled_laplacian: np.ndarray, K: int) -> list[
     return [torch.tensor(p, dtype=torch.float32) for p in polys]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Bloques de atención
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 class TemporalAttention(nn.Module):
+    """
+    Mecanismo de atención temporal que pondera los pasos de tiempo de la entrada.
+
+    Calcula una matriz de atención (B, T, T) mediante proyecciones lineales de
+    query y key, y la usa para reponderar la secuencia temporal de entrada.
+    """
+
     def __init__(self, in_channels: int, num_nodes: int, history_len: int):
+        """
+        Parámetros
+        ----------
+        in_channels : número de features por nodo por paso temporal
+        num_nodes   : número de nodos en el grafo
+        history_len : longitud de la ventana de entrada
+        """
         super().__init__()
         self.query_proj = nn.Linear(in_channels, 1, bias=False)
         self.key_proj   = nn.Linear(in_channels, 1, bias=False)
         self.scale      = np.sqrt(max(num_nodes, 1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, N, F)
+        """
+        Parámetros
+        ----------
+        x : tensor (B, T, N, F)
+
+        Devuelve
+        --------
+        Matriz de atención (B, T, T) con softmax aplicado
+        """
         q = self.query_proj(x).squeeze(-1)                              # (B, T, N)
         k = self.key_proj(x).squeeze(-1)                                # (B, T, N)
         scores = torch.matmul(q, k.transpose(1, 2)) / self.scale        # (B, T, T)
@@ -70,14 +130,36 @@ class TemporalAttention(nn.Module):
 
 
 class SpatialAttention(nn.Module):
+    """
+    Mecanismo de atención espacial que pondera los nodos del grafo.
+
+    Calcula una matriz de atención (B, N, N) que modula la convolución
+    de Chebyshev para enfocarse en los nodos más relevantes.
+    """
+
     def __init__(self, in_channels: int, num_nodes: int, history_len: int):
+        """
+        Parámetros
+        ----------
+        in_channels : número de features por nodo por paso temporal
+        num_nodes   : número de nodos en el grafo
+        history_len : longitud de la ventana de entrada
+        """
         super().__init__()
         self.query_proj = nn.Linear(in_channels, 1, bias=False)
         self.key_proj   = nn.Linear(in_channels, 1, bias=False)
         self.scale      = np.sqrt(max(history_len, 1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, N, F)
+        """
+        Parámetros
+        ----------
+        x : tensor (B, T, N, F)
+
+        Devuelve
+        --------
+        Matriz de atención espacial (B, N, N) con softmax aplicado
+        """
         q = self.query_proj(x).squeeze(-1).transpose(1, 2)             # (B, N, T)
         k = self.key_proj(x).squeeze(-1).transpose(1, 2)               # (B, N, T)
         scores = torch.matmul(q, k.transpose(1, 2)) / self.scale        # (B, N, N)
@@ -85,7 +167,22 @@ class SpatialAttention(nn.Module):
 
 
 class ChebConvWithSpatialAttention(nn.Module):
+    """
+    Convolución espectral de Chebyshev modulada por la atención espacial.
+
+    Aplica los K polinomios de Chebyshev ponderados por la matriz de atención
+    espacial y suma la contribución de cada polinomio con parámetros Theta_k.
+    """
+
     def __init__(self, K: int, cheb_polynomials: list[torch.Tensor], in_channels: int, out_channels: int):
+        """
+        Parámetros
+        ----------
+        K                : orden de los polinomios de Chebyshev
+        cheb_polynomials : lista de K tensores (N, N) precalculados
+        in_channels      : dimensión de entrada
+        out_channels     : dimensión de salida
+        """
         super().__init__()
         self.K           = K
         self.out_channels = out_channels
@@ -94,11 +191,20 @@ class ChebConvWithSpatialAttention(nn.Module):
         ])
         for theta in self.Theta:
             nn.init.xavier_uniform_(theta)
-        # Almacenar los K polinomios apilados como buffer no entrenable
+        # Polinomios apilados como buffer no entrenable para eficiencia
         self.register_buffer('cheb_polynomials', torch.stack(cheb_polynomials, dim=0))
 
     def forward(self, x: torch.Tensor, spatial_attention: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, N, F)   spatial_attention: (B, N, N)
+        """
+        Parámetros
+        ----------
+        x                : tensor (B, T, N, F)
+        spatial_attention: tensor (B, N, N)
+
+        Devuelve
+        --------
+        Tensor (B, T, N, out_channels) tras aplicar ReLU
+        """
         B, T, N, _ = x.shape
         outputs = []
         for t in range(T):
@@ -114,6 +220,14 @@ class ChebConvWithSpatialAttention(nn.Module):
 
 
 class ASTGCNBlock(nn.Module):
+    """
+    Bloque ASTGCN: atención temporal → atención espacial → ChebConv → conv temporal → residual.
+
+    Combina los mecanismos de atención temporal y espacial con la convolución
+    de Chebyshev y una convolución temporal de refinamiento. Incluye conexión
+    residual y normalización por capas.
+    """
+
     def __init__(
         self,
         in_channels: int,
@@ -124,6 +238,17 @@ class ASTGCNBlock(nn.Module):
         out_channels: int,
         temporal_kernel: int = 3,
     ):
+        """
+        Parámetros
+        ----------
+        in_channels     : canales de entrada
+        K               : orden de Chebyshev
+        cheb_polynomials: polinomios precalculados
+        num_nodes       : número de nodos
+        history_len     : longitud de la ventana
+        out_channels    : canales de salida
+        temporal_kernel : tamaño del kernel de la convolución temporal
+        """
         super().__init__()
         self.temporal_attention = TemporalAttention(in_channels, num_nodes, history_len)
         self.spatial_attention  = SpatialAttention(in_channels, num_nodes, history_len)
@@ -136,6 +261,15 @@ class ASTGCNBlock(nn.Module):
         self.layer_norm         = nn.LayerNorm(out_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Parámetros
+        ----------
+        x : tensor (B, T, N, F)
+
+        Devuelve
+        --------
+        Tensor (B, T, N, out_channels) normalizado
+        """
         temporal_attention = self.temporal_attention(x)
         x_ta  = torch.einsum('bts,bsnf->btnf', temporal_attention, x)
         spatial_attention  = self.spatial_attention(x_ta)
@@ -146,9 +280,9 @@ class ASTGCNBlock(nn.Module):
         return self.layer_norm(x_out)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # Modelo completo
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 class ASTGCN_Metro(nn.Module):
     """
@@ -188,12 +322,20 @@ class ASTGCN_Metro(nn.Module):
         self.num_targets = num_targets
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, N, F)
+        """
+        Parámetros
+        ----------
+        x : tensor (B, T, N, F)
+
+        Devuelve
+        --------
+        Tensor (B, N, num_targets) con las predicciones por nodo y horizonte
+        """
         x = self.block1(x)
         x = self.dropout(x)
         x = self.block2(x)
         x = self.dropout(x)
-        x = self.final_conv(x)                  # (B, 1, N, 1)  via (B, T, N, hid) perm
+        x = self.final_conv(x)                  # (B, 1, N, 1) via permuta interna
         x = x.squeeze(-1).squeeze(1)            # (B, N)
         x = self.fc(x)                          # (B, N * num_targets)
         return x.view(-1, self.num_nodes, self.num_targets)

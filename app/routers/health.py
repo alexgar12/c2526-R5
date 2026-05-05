@@ -1,3 +1,23 @@
+"""
+Router del endpoint de salud del servidor Express-Bound.
+
+Expone el endpoint GET /health que devuelve el estado actual del sistema:
+el estado de carga de cada modelo ML y la disponibilidad de las ventanas
+de datos cacheadas desde Google Drive.
+
+El estado global es 'ok' si todos los modelos están cargados, o 'degraded'
+si alguno no pudo cargarse (el servidor sigue operativo con los modelos disponibles).
+
+Dependencias:
+- app.config.settings: para obtener los nombres de artefacto de cada modelo.
+- app.schemas.HealthResponse / ModelStatus / DataStatus: esquemas de respuesta.
+
+Notas:
+- cache.timestamp() devuelve time.monotonic(), no un Unix timestamp. Para calcular
+  la hora de escritura en tiempo de reloj de pared se usa la diferencia con el
+  monotónico actual y se resta al timestamp UTC presente.
+"""
+
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -10,10 +30,35 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
+    """
+    Devuelve el estado del sistema: modelos cargados y datos disponibles.
+
+    Para cada modelo del registro, comprueba si hay error, si está cargado o si
+    no se ha intentado cargar, y construye un ModelStatus con la información
+    correspondiente. Para los datos, extrae las ventanas cacheadas y calcula
+    el timestamp de escritura en UTC.
+
+    Parámetros:
+        request: Objeto Request de FastAPI (accede a app.state.registry y app.state.cache).
+
+    Retorna:
+        HealthResponse con status 'ok' o 'degraded', estado de cada modelo y datos.
+    """
     registry = request.app.state.registry
     cache = request.app.state.cache
 
     def _status(key: str, entry, artifact: str) -> ModelStatus:
+        """
+        Construye el ModelStatus para un modelo concreto.
+
+        Parámetros:
+            key: Clave del modelo en registry.errors.
+            entry: Entrada del modelo (None si no está cargado).
+            artifact: Nombre del artefacto W&B configurado para este modelo.
+
+        Retorna:
+            ModelStatus con loaded=True si está cargado, o con el error si falló.
+        """
         if key in registry.errors:
             return ModelStatus(loaded=False, artifact=artifact, error=registry.errors[key])
         if entry is None:
@@ -35,8 +80,9 @@ async def health(request: Request) -> HealthResponse:
         ts = cache.timestamp("windows")
         oldest = str(cached[0]["merge_time"].min()) if cached else None
         newest = str(cached[-1]["merge_time"].max()) if cached else None
-        # cache.timestamp() returns time.monotonic(), not a Unix timestamp.
-        # Convert by computing wall-clock time at cache set: now - (mono_now - mono_ts).
+        # cache.timestamp() devuelve time.monotonic(), no un Unix timestamp.
+        # Se convierte calculando el tiempo de reloj de pared en el momento de escritura:
+        # now_wall - (mono_now - mono_ts).
         import time
         cached_at = datetime.fromtimestamp(
             datetime.now(timezone.utc).timestamp() - (time.monotonic() - ts),

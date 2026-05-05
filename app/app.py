@@ -1,3 +1,25 @@
+"""
+Punto de entrada principal de la API FastAPI Express-Bound.
+
+Define la aplicación FastAPI, gestiona el ciclo de vida del servidor (arranque y
+parada), carga todos los modelos desde Weights & Biases, inicializa las cachés
+TTL, descarga los datos estáticos de GTFS y expone los endpoints REST y WebSocket
+de la aplicación.
+
+Dependencias principales:
+- FastAPI para el servidor HTTP y WebSocket.
+- app.cache.TTLCache para cachear ventanas de datos y posiciones de vehículos.
+- app.config.settings para la configuración centralizada vía variables de entorno.
+- app.models.registry.ModelRegistry para la carga de modelos ML.
+- app.data.vehicles.fetch_positions para obtener posiciones de trenes en tiempo real.
+- Google Drive (app.data.drive) para metadatos de estaciones y datos estáticos GTFS.
+
+Notas:
+- Los modelos se cargan de forma concurrente al arrancar el servidor.
+- Los datos GTFS estáticos se descargan desde la URL pública de la MTA.
+- El endpoint WebSocket /ws/live-updates emite alertas cada 60 segundos.
+"""
+
 import asyncio
 import io
 import json
@@ -32,6 +54,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Gestiona el ciclo de vida de la aplicación FastAPI.
+
+    Al arrancar: carga todos los modelos ML desde W&B, inicializa las cachés,
+    descarga metadatos de estaciones desde Google Drive y los datos estáticos
+    GTFS, y lanza la tarea de fondo para emitir alertas por WebSocket.
+
+    Al parar: cancela la tarea de fondo de emisión de alertas.
+
+    Parámetros:
+        app: Instancia de la aplicación FastAPI.
+    """
     logger.info("Starting Express-Bound inference API…")
 
     registry = ModelRegistry()
@@ -71,6 +105,17 @@ async def lifespan(app: FastAPI):
 
 
 def _load_stations_meta() -> dict:
+    """
+    Descarga y parsea los metadatos de las estaciones del metro de NY desde Google Drive.
+
+    Obtiene el fichero MTA_Subway_Stations.csv de la carpeta GTFS_estatic en Drive
+    y construye un diccionario indexado por GTFS Stop ID con nombre, coordenadas y
+    líneas que pasan por cada estación.
+
+    Retorna:
+        Diccionario con clave = stop_id (str) y valor = dict con campos
+        'name', 'lat', 'lon' y 'routes'. Retorna {} si el fichero no está disponible.
+    """
     from app.data.drive import download_daily_file
 
     df = None
@@ -121,6 +166,23 @@ def _load_stations_meta() -> dict:
 
 
 def _load_gtfs_static() -> dict:
+    """
+    Descarga y parsea el feed GTFS estático público de la MTA.
+
+    Obtiene el ZIP de google_transit desde la web de la MTA, extrae los ficheros
+    trips.txt, shapes.txt, stops.txt y stop_times.txt, y construye tres estructuras:
+    - gtfs_shapes: geometría (lista de segmentos lat/lon) por route_id.
+    - gtfs_stops: coordenadas (lat, lon) por stop_id.
+    - prev_stop_for_route: diccionario (route_id, stop_id) -> stop_id previo, para
+      interpolar la posición visual de los trenes en movimiento.
+
+    Si la librería rdp está disponible, simplifica las geometrías con el algoritmo
+    Ramer-Douglas-Peucker (epsilon=0.0002 grados, ~22 metros).
+
+    Retorna:
+        Diccionario con claves 'shapes', 'stops' y 'prev_stop'. Si la descarga
+        falla, retorna estructuras vacías (no interrumpe el arranque del servidor).
+    """
     url = "http://web.mta.info/developers/data/nyct/subway/google_transit.zip"
 
     VALID_ROUTES = {
@@ -131,6 +193,15 @@ def _load_gtfs_static() -> dict:
     }
 
     def normalize_route_id(rid: str) -> str | None:
+        """
+        Normaliza un route_id del GTFS al identificador canónico de la línea.
+
+        Parámetros:
+            rid: Identificador de ruta crudo del GTFS (puede contener sufijos o guiones).
+
+        Retorna:
+            El route_id normalizado si es válido, None en caso contrario.
+        """
         rid = rid.strip()
         if rid in VALID_ROUTES:
             return rid
@@ -173,7 +244,7 @@ def _load_gtfs_static() -> dict:
             return (max(lats) - min(lats)) + (max(lons) - min(lons))
 
         def endpoint_key(shape_id: str) -> tuple | None:
-            """Clave (start, end) redondeada a ~1 km para agrupar shapes del mismo ramal."""
+            """Clave (inicio, fin) redondeada a ~1 km para agrupar shapes del mismo ramal."""
             pts = shapes_by_id.get(shape_id, [])
             if len(pts) < 2:
                 return None
@@ -185,8 +256,8 @@ def _load_gtfs_static() -> dict:
         for route_id, grp in trips.groupby("route_id_norm"):
             # Un shape representativo por ramal único (agrupado por endpoints).
             # Ordenar por extensión geográfica garantiza que elegimos el shape más
-            # completo de cada ramal (en lugar del top-N arbitrario que podría
-            # excluir ramales cortos como A→Lefferts Blvd).
+            # completo de cada ramal, en lugar del primero arbitrario, lo que evita
+            # excluir ramales cortos como A→Lefferts Blvd.
             unique_shapes = sorted(grp["shape_id"].unique(), key=geo_extent, reverse=True)
             seen: dict[tuple, str] = {}
             for shape_id in unique_shapes:
@@ -208,13 +279,13 @@ def _load_gtfs_static() -> dict:
                 simplified_segs = []
                 for seg in segments:
                     if len(seg) > 10:
-                        # RDP with epsilon=0.0002 degrees (~22 meters) provides good compression
+                        # Simplificación RDP con epsilon=0.0002 grados (~22 metros)
                         simplified_seg = rdp_simplify(seg, 0.0002)
                         simplified_segs.append(simplified_seg)
                     else:
                         simplified_segs.append(seg)
                 simplified_shapes[route_id] = simplified_segs
-            
+
             orig_pts = sum(len(seg) for segs in gtfs_shapes.values() for seg in segs)
             simp_pts = sum(len(seg) for segs in simplified_shapes.values() for seg in segs)
             logger.info(f"GTFS shapes simplified: {orig_pts} → {simp_pts} points ({100*simp_pts/orig_pts:.1f}%)")
@@ -264,6 +335,18 @@ def _load_gtfs_static() -> dict:
 
 
 def _sanitize_json(obj):
+    """
+    Elimina valores float no serializables (NaN, Inf) reemplazándolos por None.
+
+    Recorre recursivamente dicts y listas. Necesario antes de serializar respuestas
+    a JSON cuando los modelos ML pueden producir valores infinitos o NaN.
+
+    Parámetros:
+        obj: Cualquier objeto Python (float, dict, list u otro tipo).
+
+    Retorna:
+        El mismo objeto con los floats no finitos sustituidos por None.
+    """
     import math
     if isinstance(obj, float) and not math.isfinite(obj):
         return None
@@ -275,6 +358,16 @@ def _sanitize_json(obj):
 
 
 async def _live_broadcast(app: FastAPI) -> None:
+    """
+    Tarea de fondo que emite alertas a todos los clientes WebSocket cada 60 segundos.
+
+    Utiliza las ventanas de datos cacheadas y el modelo de alertas para generar
+    predicciones y las envía como JSON a través del gestor de conexiones WebSocket.
+    Los errores no fatales se registran como DEBUG y el bucle continúa.
+
+    Parámetros:
+        app: Instancia de la aplicación FastAPI (para acceder a app.state).
+    """
     while True:
         await asyncio.sleep(60)
         try:
@@ -304,18 +397,47 @@ async def _live_broadcast(app: FastAPI) -> None:
 
 
 class _ConnectionManager:
+    """
+    Gestiona las conexiones WebSocket activas y el envío de mensajes en broadcast.
+
+    Mantiene una lista interna de conexiones abiertas. Las conexiones que fallen
+    durante el broadcast se eliminan automáticamente.
+    """
+
     def __init__(self):
+        """Inicializa el gestor con una lista vacía de conexiones."""
         self._connections: list[WebSocket] = []
 
     async def connect(self, ws: WebSocket) -> None:
+        """
+        Acepta una nueva conexión WebSocket y la añade a la lista activa.
+
+        Parámetros:
+            ws: Objeto WebSocket de FastAPI a registrar.
+        """
         await ws.accept()
         self._connections.append(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
+        """
+        Elimina una conexión WebSocket de la lista activa.
+
+        Parámetros:
+            ws: Objeto WebSocket a desregistrar.
+        """
         if ws in self._connections:
             self._connections.remove(ws)
 
     async def broadcast(self, message: str) -> None:
+        """
+        Envía un mensaje de texto a todas las conexiones WebSocket activas.
+
+        Las conexiones que fallen durante el envío se marcan como muertas y se
+        eliminan al finalizar el broadcast.
+
+        Parámetros:
+            message: Texto (normalmente JSON serializado) a enviar.
+        """
         dead = []
         for ws in self._connections:
             try:
@@ -342,11 +464,29 @@ app.include_router(predict_router, prefix="/api")
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
+    """
+    Sirve la página principal de la interfaz web.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        Respuesta HTML renderizada con la plantilla index.html.
+    """
     return templates.TemplateResponse(request, name="index.html")
 
 
 @app.get("/api/stations")
 def get_stations(request: Request):
+    """
+    Devuelve la lista completa de estaciones con sus metadatos.
+
+    Parámetros:
+        request: Objeto Request de FastAPI (accede a app.state.stations_meta).
+
+    Retorna:
+        Lista de dicts con 'id', 'name', 'lat', 'lon' y 'routes' por estación.
+    """
     return [
         {"id": sid, **data}
         for sid, data in request.app.state.stations_meta.items()
@@ -355,7 +495,18 @@ def get_stations(request: Request):
 
 @app.get("/api/warmup")
 async def warmup(request: Request):
-    """Pre-warm the Drive window cache so the first prediction has no extra latency."""
+    """
+    Pre-carga la caché de ventanas de Drive para evitar latencia extra en la primera predicción.
+
+    Si las ventanas no están cacheadas, las descarga de Google Drive y las almacena
+    en la caché TTL de la aplicación.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        Dict con {"status": "ready"} una vez que la caché está disponible.
+    """
     from app.data.drive import download_windows
     cache = request.app.state.cache
     if cache.get("windows") is None:
@@ -371,7 +522,19 @@ async def warmup(request: Request):
 
 @app.get("/api/debug/stop")
 async def debug_stop(request: Request, stop_id: str):
-    """Diagnostic: check DCRNN and Drive-window coverage for a given stop_id."""
+    """
+    Endpoint de diagnóstico para verificar la cobertura de un stop_id concreto.
+
+    Comprueba si el stop_id aparece en los nodos del modelo DCRNN y en la última
+    ventana de datos cacheada de Drive, mostrando información detallada de cobertura.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        stop_id: Identificador GTFS de la parada a diagnosticar.
+
+    Retorna:
+        Dict con secciones 'dcrnn' y 'drive_windows' describiendo la cobertura encontrada.
+    """
     registry = request.app.state.registry
     cache = request.app.state.cache
     windows = cache.get("windows")
@@ -416,6 +579,7 @@ async def debug_stop(request: Request, stop_id: str):
     return result
 
 
+# Orden canónico de paradas por línea, de norte a sur o de inicio a fin de recorrido.
 _ROUTE_ORDER: dict[str, list[str]] = {
     "1": ["Van Cortlandt Park-242 St","238 St","231 St","Marble Hill-225 St","215 St","207 St","Dyckman St","191 St","181 St","168 St-Washington Hts","157 St","145 St","137 St-City College","125 St","116 St-Columbia University","Cathedral Pkwy (110 St)","103 St","96 St","86 St","79 St","72 St","66 St-Lincoln Center","59 St-Columbus Circle","50 St","Times Sq-42 St","34 St-Penn Station","28 St","23 St","18 St","14 St","Christopher St-Stonewall","Houston St","Canal St","Franklin St","Chambers St","WTC Cortlandt","Rector St","South Ferry"],
     "2": ["Wakefield-241 St","Nereid Av","233 St","225 St","219 St","Gun Hill Rd","Burke Av","Allerton Av","Pelham Pkwy","Bronx Park East","E 180 St","West Farms Sq-E Tremont Av","174 St","Freeman St","Simpson St","Intervale Av","Prospect Av","Jackson Av","3 Av-149 St","149 St-Grand Concourse","135 St","125 St","116 St","110 St-Malcolm X Plaza","103 St","96 St","86 St","72 St","Times Sq-42 St","34 St-Penn Station","28 St","23 St","14 St","Chambers St","Fulton St","Wall St","Clark St","Borough Hall","Nevins St","Atlantic Av-Barclays Ctr","Bergen St","Carroll St","Smith-9 Sts","4 Av-9 St","Prospect Av","25 St","36 St","53 St","59 St"],
@@ -446,6 +610,19 @@ _ROUTE_ORDER: dict[str, list[str]] = {
 
 @app.get("/api/routes")
 def get_routes(request: Request):
+    """
+    Devuelve el orden canónico de stop_ids por línea para el mapa de la interfaz.
+
+    Construye un índice inverso de nombre de parada a stop_id usando los metadatos
+    de estaciones, luego recorre _ROUTE_ORDER para asignar los IDs correspondientes.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        Dict con clave = route_id y valor = lista ordenada de stop_ids.
+        Solo incluye líneas con al menos 2 paradas resueltas.
+    """
     meta = request.app.state.stations_meta
 
     name_to_candidates: dict[str, list[tuple[str, set[str]]]] = {}
@@ -455,6 +632,16 @@ def get_routes(request: Request):
         name_to_candidates.setdefault(name, []).append((sid, routes_set))
 
     def lookup(stop_name: str, line: str) -> str | None:
+        """
+        Busca el stop_id que mejor coincide con el nombre y línea dados.
+
+        Parámetros:
+            stop_name: Nombre de la parada (sin normalizar).
+            line: Identificador de la línea (p.ej. 'A', '1').
+
+        Retorna:
+            El stop_id más apropiado, o None si no se encuentra ninguno.
+        """
         candidates = name_to_candidates.get(stop_name.lower(), [])
         if not candidates:
             return None
@@ -473,13 +660,32 @@ def get_routes(request: Request):
 
 @app.get("/api/shapes")
 def get_shapes(request: Request):
-    """Return GTFS shape geometry per route: { routeId: [[lat, lon], ...] }"""
+    """
+    Devuelve la geometría GTFS de cada línea para renderizar el mapa.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        Dict con clave = route_id y valor = lista de segmentos [[lat, lon], ...].
+    """
     return request.app.state.gtfs_shapes
 
 
 @app.get("/api/vehicles")
 async def get_vehicles(request: Request) -> list[dict]:
-    """Return current train positions. Cached for 30 s."""
+    """
+    Devuelve las posiciones actuales de los trenes en servicio, con caché de 90 segundos.
+
+    Si la caché no ha expirado, devuelve los datos almacenados. En caso contrario,
+    consulta los feeds GTFS-RT de la MTA y actualiza la caché.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        Lista de dicts con posición, ruta, dirección y estado de cada tren.
+    """
     cache = request.app.state.vehicles_cache
     cached = cache.get("vehicles")
     if cached is not None:
@@ -496,6 +702,15 @@ async def get_vehicles(request: Request) -> list[dict]:
 
 @app.websocket("/ws/live-updates")
 async def websocket_endpoint(websocket: WebSocket):
+    """
+    Endpoint WebSocket para recibir alertas en tiempo real.
+
+    Registra la conexión en el gestor y mantiene el bucle de recepción activo
+    hasta que el cliente se desconecte.
+
+    Parámetros:
+        websocket: Objeto WebSocket de FastAPI.
+    """
     manager: _ConnectionManager = websocket.app.state.ws_manager
     await manager.connect(websocket)
     try:

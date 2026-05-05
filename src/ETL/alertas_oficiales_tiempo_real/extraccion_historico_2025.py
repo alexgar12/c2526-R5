@@ -1,12 +1,25 @@
 """
-Módulo de ingesta histórica de alertas oficiales MTA.
-Se integra con el orquestador 'run_extraccion' y permite:
-- Descargar alertas históricas desde data.ny.gov
-- Extraer los datos en un rango de fechas indicadas
-- Subir los datos a la carpeta raw de MINIO en forma JSON
+Módulo de ingesta histórica de alertas oficiales de la MTA.
 
-La función principal 'ingest_alertas' es el punto de entrada
-llamado por el orquestador del pipeline.
+Descarga alertas históricas del dataset público data.ny.gov (recurso 7kct-peq7)
+para un rango de fechas dado y las sube como JSON a la capa RAW de MinIO.
+
+Funcionamiento:
+  1. La función `fetch_data` consulta la API con paginación hasta obtener todos
+     los registros del período solicitado.
+  2. La función `ingest_alertas` valida credenciales, descarga los datos y los
+     sube a MinIO bajo la ruta estructurada por rango de fechas.
+
+Dependencias:
+  - requests         : peticiones HTTP a la API de NY Open Data
+  - src.common.minio_client.upload_json : subida del JSON a MinIO
+
+Variables de entorno requeridas:
+  - MINIO_ACCESS_KEY
+  - MINIO_SECRET_KEY
+
+Nota: La función `ingest_alertas` es el punto de entrada llamado por el
+orquestador del pipeline (run_extraccion).
 """
 
 import requests
@@ -15,19 +28,27 @@ import json
 from datetime import datetime
 from typing import List, Dict
 from src.common.minio_client import upload_json
+
 BASE_URL = "https://data.ny.gov/resource/7kct-peq7.json"
 MINIO_BASE_PATH = "grupo5/raw/official_alerts"
 
 
 def fetch_data(start_date: str, end_date: str, limit: int = 50000):
-    """ 
-    Descarga datos históricos del dataset de alertas oficiales
-    utilizando paginación.
-    limit : Número máximo de registros por petición
-    where: devuelve los registos cuya columna date esté entre esas fechas
-    offset : es lo que permite la paginación. 
-    En cada iteración descarga un bloque de 50.000, los añade a all_results, incremneta
-    el offset y repite hasta que no queden datos
+    """
+    Descarga todos los registros de alertas oficiales entre dos fechas usando paginación.
+
+    Itera con offset incremental de `limit` registros por petición hasta que la API
+    devuelve una respuesta vacía, momento en que se detiene.
+
+    Parámetros
+    ----------
+    start_date : Fecha de inicio en formato 'YYYY-MM-DDTHH:MM:SS.sss'.
+    end_date   : Fecha de fin en formato 'YYYY-MM-DDTHH:MM:SS.sss'.
+    limit      : Número máximo de registros por petición (por defecto 50 000).
+
+    Devuelve
+    --------
+    Lista de diccionarios con todos los registros descargados.
     """
     all_results = []
     offset = 0
@@ -55,16 +76,21 @@ def fetch_data(start_date: str, end_date: str, limit: int = 50000):
     return all_results
 
 
-
-
 def ingest_alertas(start: str, end: str) -> None:
     """
-    Función principal de ingesta llamada por el orquestador.
-    Realiza lo siguiente:
-    -Valida las credenciales de minio.
-    - Descarga los datos históricos en el rango indicado.
-    - Construye la ruta de almacenamiento
-    - Sube el JSON directamente a MINIO
+    Punto de entrada principal llamado por el orquestador del pipeline.
+
+    Valida las credenciales de MinIO, descarga los datos históricos en el rango
+    indicado y sube el JSON resultante a la ruta estructurada en MinIO.
+
+    Parámetros
+    ----------
+    start : Fecha de inicio en formato 'YYYY-MM-DD'.
+    end   : Fecha de fin en formato 'YYYY-MM-DD'.
+
+    Lanza
+    -----
+    ValueError si las variables de entorno de MinIO no están definidas.
     """
     print(f"[alertas] START start={start} end={end}")
     access_key = os.getenv("MINIO_ACCESS_KEY")

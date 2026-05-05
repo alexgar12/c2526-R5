@@ -1,5 +1,15 @@
 """
-Genera token_drive.json mediante el flujo OAuth 2.0 del usuario.
+Genera el archivo token_drive.json mediante el flujo OAuth 2.0 interactivo del usuario.
+
+Este script debe ejecutarse una sola vez de forma local para autenticar la cuenta de
+Google y guardar las credenciales en disco. El token resultante es utilizado por otros
+módulos del proyecto (upload_daily_data.py, upload_realtime_window.py, etc.) para
+acceder a Google Drive sin requerir intervención manual posterior.
+
+Dependencias:
+    - google-auth-oauthlib
+    - google-auth
+    - google-api-python-client
 
 Requisito previo:
     Descarga credentials.json desde Google Cloud Console:
@@ -25,6 +35,16 @@ TOKEN_PATH = Path("src/ETL/alertas_oficiales_tiempo_real/token_drive.json")
 
 
 def main():
+    """
+    Flujo principal de autenticación OAuth 2.0.
+
+    Si el token ya existe y es válido, no hace nada adicional. Si ha expirado
+    pero tiene refresh_token, lo refresca automáticamente. Si no existe, abre
+    el navegador para completar el flujo de autorización interactivo y guarda
+    el token resultante en TOKEN_PATH.
+
+    Lanza FileNotFoundError si credentials.json no existe en la raíz del proyecto.
+    """
     if not CREDENTIALS_PATH.exists():
         raise FileNotFoundError(
             "No se encuentra credentials.json en la raíz del proyecto.\n"

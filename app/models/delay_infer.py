@@ -1,3 +1,29 @@
+"""
+Inferencia de los modelos LightGBM de predicción de retraso absoluto.
+
+Proporciona dos funciones de inferencia:
+- run_delay_single: predicción para un único viaje (tren concreto) a partir de
+  un diccionario de features extraídas por get_trip_features.
+- run_delays: predicción masiva para todas las paradas de la última ventana de Drive,
+  con filtros opcionales por ruta y parada.
+
+Los modelos predicen el retraso esperado en segundos en dos horizontes:
+- target_delay_30m: retraso en 30 minutos.
+- target_delay_end: retraso al final del recorrido del tren.
+
+Dependencias:
+- app.data.transforms.windows_to_delay_features: prepara el DataFrame de features.
+- app.models.registry.LGBMDelayEntry: contenedor del modelo y preprocesado cargados.
+- app.schemas.DelayPrediction / DelayResponse: esquemas Pydantic de respuesta.
+- lightgbm (implícito a través de joblib): el modelo se carga como objeto LightGBM Booster.
+
+Notas:
+- _apply_preprocessing codifica variables categóricas (label encoding, target encoding)
+  y calcula features derivadas (delay_velocity, delay_acceleration, etc.) tal como
+  se hizo en el entrenamiento.
+- Las predicciones se recortan a 0 por abajo (no puede haber retraso negativo en la respuesta).
+"""
+
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -13,6 +39,22 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_preprocessing(df: pd.DataFrame, prep: dict) -> pd.DataFrame:
+    """
+    Aplica el preprocesado guardado en el artefacto de W&B al DataFrame de inferencia.
+
+    Realiza en orden:
+    1. Label encoding de columnas categóricas según los mapeos del artefacto.
+    2. Target encoding de stop_id usando el encoder entrenado y la media global.
+    3. Eliminación de columnas de identificación (stop_id, match_key).
+    4. Cálculo de features derivadas (velocidad, aceleración, ratio de retraso).
+
+    Parámetros:
+        df: DataFrame con las features crudas de inferencia.
+        prep: Dict de preprocesado cargado desde preprocessing_*.json del artefacto.
+
+    Retorna:
+        DataFrame con las features transformadas, listo para llamar a model.predict().
+    """
     df = df.copy()
 
     for col, mapping in prep.get("label_encoders", {}).items():
@@ -44,7 +86,19 @@ def _apply_preprocessing(df: pd.DataFrame, prep: dict) -> pd.DataFrame:
 
 
 def run_delay_single(entry: LGBMDelayEntry, features: dict) -> float:
-    """Run LGBM delay inference on a single-trip features dict from get_trip_features."""
+    """
+    Ejecuta el modelo LightGBM de retraso sobre las features de un único viaje.
+
+    Aplica el label encoding, target encoding de stop_id y alinea las columnas
+    con las features del modelo. Las columnas faltantes se rellenan con 0.
+
+    Parámetros:
+        entry: Contenedor LGBMDelayEntry con el modelo y el preprocesado.
+        features: Dict de features extraídas por get_trip_features para un tren concreto.
+
+    Retorna:
+        Retraso predicho en segundos como float.
+    """
     df = pd.DataFrame([features])
 
     for col, mapping in entry.preprocessing.get("label_encoders", {}).items():
@@ -72,7 +126,24 @@ def run_delays(
     stop_id_filter: Optional[str] = None,
     min_delay_seconds: float = 0.0,
 ) -> DelayResponse:
-    """Run LightGBM delay inference and return a DelayResponse."""
+    """
+    Ejecuta el modelo LightGBM de retraso sobre todas las paradas de la última ventana.
+
+    Prepara las features con windows_to_delay_features, aplica los filtros opcionales,
+    llama a _apply_preprocessing, alinea las columnas y ejecuta model.predict().
+    Las predicciones menores que min_delay_seconds se omiten de la respuesta.
+
+    Parámetros:
+        entry: Contenedor LGBMDelayEntry con el modelo y el preprocesado.
+        windows: Lista de DataFrames de ventanas; solo se usa la última (windows[-1]).
+        route_id_filter: Si se especifica, solo se predicen retrasos para esa línea.
+        stop_id_filter: Si se especifica, filtra por stop_id exacto o base (sin sufijo N/S).
+        min_delay_seconds: Umbral mínimo de retraso para incluir en la respuesta.
+
+    Retorna:
+        DelayResponse con las predicciones, el target y el timestamp. Si no hay datos
+        tras el filtrado, devuelve una respuesta con lista vacía.
+    """
     df = windows_to_delay_features(windows)
 
     if route_id_filter and "route_id" in df.columns:

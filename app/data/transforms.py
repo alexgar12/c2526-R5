@@ -1,3 +1,30 @@
+"""
+Transformaciones de ventanas de datos para los modelos de inferencia.
+
+Convierte las ventanas de DataFrames descargadas de Google Drive en las
+estructuras que esperan cada uno de los modelos ML:
+
+- windows_to_dcrnn_tensor: construye el tensor (1, T, N, F) para el modelo DCRNN
+  de propagación de retrasos, aplicando normalización y padding temporal.
+- windows_to_delay_features: prepara el DataFrame de features para los modelos
+  LightGBM de predicción de retraso absoluto (30m y hasta el final del viaje).
+- windows_to_alertas_features: agrega las ventanas por línea y dirección y
+  calcula features rolling para el modelo XGBoost de alertas de incidencia.
+
+Dependencias:
+- numpy y torch para las operaciones matriciales del tensor DCRNN.
+- pandas para todas las transformaciones tabulares.
+- src.models.modelos_alertas.common.pipeline_linea para la agregación por línea
+  (solo usada en windows_to_alertas_features).
+
+Notas:
+- ALL_FEATURE_COLS define el orden canónico de features del DCRNN.
+- _DCRNN_COL_MAP mapea los nombres de columna de las ventanas de Drive a los
+  nombres internos que usa el DCRNN.
+- _DELAY_EXCLUDE lista las columnas target y derivadas que deben eliminarse antes
+  de la inferencia con los modelos de retraso.
+"""
+
 import gc
 import logging
 
@@ -8,6 +35,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+# Columnas de features en el orden canónico que espera el modelo DCRNN
 ALL_FEATURE_COLS = [
     "delay_seconds",
     "lagged_delay_1",
@@ -25,6 +53,7 @@ ALL_FEATURE_COLS = [
     "afecta_despues",
 ]
 
+# Mapeo del nombre de columna en las ventanas de Drive al nombre interno del DCRNN
 _DCRNN_COL_MAP: dict[str, str] = {
     "delay_seconds":          "delay_seconds_mean",
     "lagged_delay_1":         "lagged_delay_1_mean",
@@ -50,7 +79,29 @@ def windows_to_dcrnn_tensor(
     scaler_X,
     history_len: int,
 ) -> torch.Tensor:
+    """
+    Convierte una lista de ventanas de datos en el tensor de entrada del modelo DCRNN.
 
+    Pasos principales:
+    1. Concatena todas las ventanas y renombra columnas al esquema interno.
+    2. Discretiza el tiempo en bins de 15 minutos y recalcula features temporales cíclicas.
+    3. Filtra los nodos presentes en el modelo, agrega por (time_bin, nodo) y
+       rellena la rejilla completa (tiempo × nodo) con ceros donde no hay datos.
+    4. Aplica la normalización del scaler entrenado y selecciona el subconjunto
+       de features indicado.
+    5. Añade padding al inicio si hay menos timesteps que history_len.
+
+    Parámetros:
+        windows: Lista de DataFrames con datos de ventanas temporales de Drive.
+        nodes: Lista de identificadores de nodo del modelo (formato 'route_stop_id').
+        feature_set: Índices de las columnas de ALL_FEATURE_COLS a usar como entrada.
+        scaler_X: Scaler entrenado (sklearn-compatible) para normalizar las features.
+        history_len: Número de pasos temporales que espera el modelo como entrada.
+
+    Retorna:
+        Tensor de PyTorch con forma (1, history_len, N, n_features), listo para
+        pasarse directamente al modelo DCRNN.
+    """
     N = len(nodes)
     F_all = len(ALL_FEATURE_COLS)
     node_set = set(nodes)
@@ -115,7 +166,7 @@ def windows_to_dcrnn_tensor(
     return torch.from_numpy(X_sel).unsqueeze(0)  # (1, history_len, N, n_sel)
 
 
-
+# Columnas target y derivadas que deben eliminarse antes de inferencia con LightGBM
 _DELAY_EXCLUDE = {
     "target_delay_10m_mean", "target_delay_10m_max",
     "target_delay_20m_mean", "target_delay_20m_max",
@@ -139,11 +190,24 @@ _DELAY_EXCLUDE = {
 
 
 def windows_to_delay_features(windows: list[pd.DataFrame]) -> pd.DataFrame:
+    """
+    Prepara el DataFrame de features para los modelos LightGBM de retraso.
 
+    Toma la última ventana disponible, añade features temporales derivadas
+    (hora, minuto, día de la semana), convierte columnas categóricas y elimina
+    las columnas target y de timestamps que no deben usarse en inferencia.
+
+    Parámetros:
+        windows: Lista de DataFrames de ventanas. Solo se usa la última (windows[-1]).
+
+    Retorna:
+        DataFrame con las features listas para pasar al modelo LightGBM,
+        con las columnas target y temporales eliminadas.
+    """
     df = windows[-1].copy()
     df["merge_time"] = pd.to_datetime(df["merge_time"])
 
-    # Temporal features added by procesar() in the training script
+    # Features temporales añadidas por procesar() en el script de entrenamiento
     df["hora"] = df["merge_time"].dt.hour
     df["minuto"] = df["merge_time"].dt.minute
     df["dia_semana"] = df["merge_time"].dt.dayofweek
@@ -166,10 +230,21 @@ def windows_to_delay_features(windows: list[pd.DataFrame]) -> pd.DataFrame:
     return df
 
 
-
-
 def windows_to_alertas_features(windows: list[pd.DataFrame]) -> pd.DataFrame:
+    """
+    Agrega las ventanas de datos por línea y dirección para el modelo de alertas XGBoost.
 
+    Concatena todas las ventanas, calcula features de retraso histórico (lagged delays),
+    delega la agregación por línea y las features rolling al pipeline del modelo de
+    alertas, y devuelve solo el estado más reciente por (route_id, direction).
+
+    Parámetros:
+        windows: Lista de DataFrames de ventanas temporales (todas se usan).
+
+    Retorna:
+        DataFrame con una fila por (route_id, direction) con las features de
+        contexto de línea más recientes, listo para predecir con el modelo XGBoost.
+    """
     from src.models.modelos_alertas.common.pipeline_linea import (
         agregar_por_linea,
         agregar_features_rolling_retraso,

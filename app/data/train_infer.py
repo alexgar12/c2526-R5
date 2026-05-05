@@ -1,3 +1,24 @@
+"""
+Extracción de features por viaje desde el feed GTFS-RT de la MTA para inferencia individual.
+
+Este módulo se encarga de consultar el feed GTFS en tiempo real correspondiente
+a una línea concreta, localizar el viaje (trip) indicado y construir un DataFrame
+con las features que esperan los modelos de predicción de retraso por tren.
+
+Dependencias:
+- requests: para descargar el feed GTFS-RT en formato Protobuf.
+- google.transit.gtfs_realtime_pb2: para parsear el mensaje Protobuf.
+- pandas: para construir el DataFrame de features.
+- Las ventanas de datos de Drive (opcionales) enriquecen las features con
+  estadísticas agregadas a nivel de ruta.
+
+Notas:
+- FeedUnavailable se lanza cuando el feed no responde o devuelve un error HTTP.
+- TripNotFound se lanza cuando el trip_id no aparece en el feed o no tiene paradas.
+- Las features de contexto de ruta (rolling delay, headway, alertas) se rellenan
+  con valores por defecto si no están disponibles en las ventanas de Drive.
+"""
+
 import logging
 import math
 from datetime import datetime, timezone
@@ -10,12 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 class FeedUnavailable(Exception):
-    """Raised when the GTFS-RT feed request fails (timeout, HTTP error, etc.)."""
+    """Se lanza cuando la petición al feed GTFS-RT falla (timeout, error HTTP, etc.)."""
 
 
 class TripNotFound(Exception):
-    """Raised when the trip_id is not present in the feed."""
+    """Se lanza cuando el trip_id no está presente en el feed consultado."""
 
+# Mapeo de route_id normalizado a URL del feed GTFS-RT de la MTA
 _FEED_FOR_ROUTE: dict[str, str] = {
     **{r: "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace"
        for r in ("A", "C", "E")},
@@ -34,6 +56,18 @@ _FEED_FOR_ROUTE: dict[str, str] = {
 
 
 def _su_delay(su) -> float | None:
+    """
+    Extrae el retraso en segundos de un StopTimeUpdate del feed GTFS-RT.
+
+    Intenta leer primero el campo arrival.delay y, si no está disponible o es
+    cero, el campo departure.delay.
+
+    Parámetros:
+        su: Objeto StopTimeUpdate del Protobuf GTFS-RT.
+
+    Retorna:
+        El retraso en segundos como float, o None si no hay información de retraso.
+    """
     try:
         if su.HasField("arrival") and su.arrival.delay != 0:
             return float(su.arrival.delay)
@@ -48,6 +82,15 @@ def _su_delay(su) -> float | None:
 
 
 def _normalize_route(rid: str) -> str:
+    """
+    Normaliza un route_id eliminando sufijos de shape y variantes de formato.
+
+    Parámetros:
+        rid: Identificador de ruta crudo (puede contener '-', '_', espacios).
+
+    Retorna:
+        Identificador de ruta canónico (p.ej. '1', 'A', 'SIR').
+    """
     return rid.strip().split("-")[0].split("_")[0]
 
 
@@ -57,7 +100,29 @@ def fetch_train_features(
     stop_id: str,
     windows: list,
 ) -> pd.DataFrame | None:
+    """
+    Construye un DataFrame de features para un viaje concreto consultando el feed GTFS-RT.
 
+    Descarga el feed GTFS-RT de la línea indicada, localiza el trip_id, extrae
+    el retraso actual y los dos retrasos previos, calcula features temporales y
+    de recorrido, y enriquece el resultado con estadísticas de ruta de la última
+    ventana de Drive si está disponible.
+
+    Parámetros:
+        trip_id: Identificador del viaje GTFS-RT (match_key del tren).
+        route_id: Identificador de la línea (se normaliza internamente).
+        stop_id: Identificador GTFS de la parada actual del tren.
+        windows: Lista de DataFrames de ventanas de Drive para enriquecer features
+                 de contexto de ruta. Puede ser una lista vacía.
+
+    Retorna:
+        DataFrame de pandas con una fila y todas las features necesarias para
+        los modelos de retraso y delta.
+
+    Lanza:
+        FeedUnavailable: si el feed GTFS-RT no responde o devuelve error.
+        TripNotFound: si el trip_id no se encuentra en el feed o no tiene paradas.
+    """
     route_norm = _normalize_route(route_id)
     feed_url = _FEED_FOR_ROUTE.get(route_norm)
     if feed_url is None:
@@ -86,7 +151,7 @@ def fetch_train_features(
 
     current_idx = next(
         (i for i, s in enumerate(stops) if s.stop_id == stop_id),
-        len(stops) - 1,   # fall back to last known stop
+        len(stops) - 1,   # Si no se encuentra la parada, usar la última conocida
     )
     current_su = stops[current_idx]
     future_stops = stops[current_idx + 1:]
@@ -96,7 +161,6 @@ def fetch_train_features(
     prev2_delay = _su_delay(stops[current_idx - 2]) if current_idx >= 2 else 0.0
 
     stops_to_end = len(future_stops)
-
 
     scheduled_time_to_end = 0.0
     try:
@@ -120,7 +184,7 @@ def fetch_train_features(
         "stop_id":    stop_id,
         "route_id":   route_norm,
         "direction":  direction,
-        "merge_time": now,          
+        "merge_time": now,
 
         "delay_seconds_mean":  float(max(0.0, delay_now)),
         "delay_seconds_max":   float(max(0.0, delay_now)),
@@ -139,6 +203,7 @@ def fetch_train_features(
 
         "is_unscheduled_max": float(is_unscheduled),
 
+        # Features de contexto de ruta; se sobreescriben si hay datos en Drive
         "route_rolling_delay_mean":     float(max(0.0, delay_now)),
         "actual_headway_seconds_mean":  0.0,
         "n_eventos_afectando_max":      0.0,
