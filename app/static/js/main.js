@@ -786,8 +786,8 @@ async function updateForecast(lineCode) {
     const stopParam = encodeURIComponent(station.id);
 
     const [nowResp, propResp, alertResp] = await Promise.allSettled([
-        fetch(`/api/predict/current?stop_id=${stopParam}`),
-        fetch(`/api/predict/propagation?stop_id=${stopParam}`),
+        fetch(`/api/predict/current?stop_id=${stopParam}&route_id=${encodeURIComponent(lineCode)}`),
+        fetch(`/api/predict/propagation?stop_id=${stopParam}&route_id=${encodeURIComponent(lineCode)}`),
         fetch(`/api/predict/alerts?route_id=${encodeURIComponent(lineCode)}`),
     ]);
 

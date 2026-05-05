@@ -380,8 +380,12 @@ async def debug_stop(request: Request, stop_id: str):
 
     if registry.dcrnn is not None:
         nodes = registry.dcrnn.nodes
-        exact = [n for n in nodes if n == stop_id]
-        base_match = [n for n in nodes if n[:-1] == stop_id and n[-1] in ("N", "S")]
+        def _gtfs_stop(n: str) -> str:
+            parts = n.split("_", 1)
+            return parts[1] if len(parts) > 1 else n
+        exact = [n for n in nodes if _gtfs_stop(n) == stop_id]
+        base_match = [n for n in nodes if _gtfs_stop(n)[:-1] == stop_id
+                      and _gtfs_stop(n)[-1] in ("N", "S")]
         result["dcrnn"] = {
             "n_total_nodes": len(nodes),
             "exact_match": exact,
