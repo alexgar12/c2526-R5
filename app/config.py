@@ -29,7 +29,7 @@ class Settings:
             ),
         )
     )
-    n_windows: int = int(os.getenv("N_WINDOWS", "8"))
+    n_windows: int = int(os.getenv("N_WINDOWS", "12"))
 
     # Inference
     data_cache_ttl: int = int(os.getenv("DATA_CACHE_TTL", "900"))

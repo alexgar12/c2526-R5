@@ -35,7 +35,13 @@ async def health(request: Request) -> HealthResponse:
         ts = cache.timestamp("windows")
         oldest = str(cached[0]["merge_time"].min()) if cached else None
         newest = str(cached[-1]["merge_time"].max()) if cached else None
-        cached_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+        # cache.timestamp() returns time.monotonic(), not a Unix timestamp.
+        # Convert by computing wall-clock time at cache set: now - (mono_now - mono_ts).
+        import time
+        cached_at = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() - (time.monotonic() - ts),
+            tz=timezone.utc,
+        ).isoformat() if ts else None
         data_status = DataStatus(
             windows_available=len(cached),
             oldest_window=oldest,

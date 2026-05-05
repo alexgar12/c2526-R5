@@ -66,9 +66,15 @@ def windows_to_dcrnn_tensor(
     df["hour_cos"] = np.cos(2 * np.pi * df["time_bin"].dt.hour / 24)
     df["dow"] = df["time_bin"].dt.dayofweek.astype(float)
 
-    df = df[df["stop_id"].isin(node_set)]
+    df["_node_key"] = df["route_id"].astype(str) + "_" + df["stop_id"].astype(str)
+    df = df[df["_node_key"].isin(node_set)]
     agg_rules = {f: "mean" for f in ALL_FEATURE_COLS if f in df.columns}
-    df_st = df.groupby(["time_bin", "stop_id"]).agg(agg_rules).reset_index()
+    df_st = (
+        df.groupby(["time_bin", "_node_key"])
+        .agg(agg_rules)
+        .reset_index()
+        .rename(columns={"_node_key": "stop_id"})
+    )
     del df
     gc.collect()
 
