@@ -5,5 +5,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /
 COPY pyproject.toml ./
 RUN uv sync --no-dev
 COPY . .
-EXPOSE 8000
-CMD ["sh", "-c", "/app/.venv/bin/python -m src.ETL.pipelines.realtime.local_realtime_worker & exec /app/.venv/bin/fastapi run app/app.py --port 8000"]
+CMD ["sh", "-c", "uv run python -m src.ETL.pipelines.realtime.local_realtime_worker & exec uv run fastapi run app/app.py --port 8000"]

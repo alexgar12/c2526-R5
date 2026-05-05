@@ -320,11 +320,11 @@ async def predict_train(
         ),
         "delta_20m": (
             _safe("delta_20m", run_delta_single, entry=registry.delta_20m, features=features)
-            if registry.delta_20m is not None else asyncio.sleep(0, result=None)
+            if (scheduled_time_to_end >= 1200 and registry.delta_20m is not None) else asyncio.sleep(0, result=None)
         ),
         "delta_30m": (
             _safe("delta_30m", run_delta_single, entry=registry.delta_30m, features=features)
-            if registry.delta_30m is not None else asyncio.sleep(0, result=None)
+            if (scheduled_time_to_end >= 1800 and registry.delta_30m is not None) else asyncio.sleep(0, result=None)
         ),
     }
 
