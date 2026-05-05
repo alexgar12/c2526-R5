@@ -1,4 +1,3 @@
-"""XGBoost alert inference: per-line alert probability."""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -12,9 +11,7 @@ from app.schemas import AlertPrediction, AlertResponse
 
 logger = logging.getLogger(__name__)
 
-# Alphabetical ordering — must match the OrdinalEncoder fitted on training data
-# (sklearn OrdinalEncoder sorts categories alphabetically by default).
-# All route_ids present in grupo5/aggregations/DataFrameGroupedByMin=30.parquet.
+
 _ROUTE_ORDER = sorted([
     "1", "2", "3", "4", "5", "6", "7",
     "A", "B", "C", "D", "E", "F", "G",
@@ -35,7 +32,6 @@ def run_alerts(
     route_id_filter: Optional[str] = None,
     min_prob: float = 0.0,
 ) -> AlertResponse:
-    """Run XGBoost alert inference and return an AlertResponse."""
     thr = threshold if threshold is not None else entry.threshold
 
     df_linea = windows_to_alertas_features(windows)
@@ -61,8 +57,7 @@ def run_alerts(
             known_features = []
 
     df_feat = df_linea.copy()
-    # Replicate the OrdinalEncoder fitted during training: fixed alphabetical
-    # codes over the full known route/direction sets. Unknown values → -1.
+
     if "route_id" in df_feat.columns:
         df_feat["route_id"] = (
             df_feat["route_id"].astype(str).map(_ROUTE_CODES).fillna(-1).astype(int)

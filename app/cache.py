@@ -3,7 +3,6 @@ from typing import Any, Optional
 
 
 class TTLCache:
-    """Simple in-memory cache with per-entry time-to-live."""
 
     def __init__(self, ttl_seconds: int = 60):
         self._ttl = ttl_seconds

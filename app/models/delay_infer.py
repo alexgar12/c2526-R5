@@ -1,4 +1,3 @@
-"""LightGBM delay/end inference: per-stop absolute delay prediction."""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,15 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_preprocessing(df: pd.DataFrame, prep: dict) -> pd.DataFrame:
-    """Apply label encoding, target encoding and derived features from preprocessing JSON."""
     df = df.copy()
 
-    # Label encoding for categorical columns
     for col, mapping in prep.get("label_encoders", {}).items():
         if col in df.columns:
             df[col] = df[col].astype(str).map(mapping).fillna(-1).astype(int)
 
-    # Target encoding for stop_id
     stop_enc = prep.get("target_encoder_stop_id", {})
     global_mean = prep.get("target_encoder_global_mean", 0.0)
     if stop_enc and "stop_id" in df.columns:
@@ -30,10 +26,8 @@ def _apply_preprocessing(df: pd.DataFrame, prep: dict) -> pd.DataFrame:
             df["stop_id"].astype(str).map(stop_enc).fillna(global_mean)
         )
 
-    # Drop raw identifier columns not used as features
     df = df.drop(columns=[c for c in ("stop_id", "match_key") if c in df.columns])
 
-    # Derived features
     for feat in prep.get("derived_features", []):
         if feat == "delay_velocity" and "delay_seconds_mean" in df.columns and "lagged_delay_1_mean" in df.columns:
             df["delay_velocity"] = df["delay_seconds_mean"] - df["lagged_delay_1_mean"]
@@ -95,14 +89,12 @@ def run_delays(
             predictions=[],
         )
 
-    # Keep metadata columns before encoding
     stop_ids = df["stop_id"].astype(str).tolist() if "stop_id" in df.columns else []
     route_ids = df["route_id"].astype(str).tolist() if "route_id" in df.columns else []
     directions = df["direction"].astype(str).tolist() if "direction" in df.columns else []
 
     df = _apply_preprocessing(df, entry.preprocessing)
 
-    # Align to model's expected features
     model = entry.model
     try:
         feature_names = model.feature_name()

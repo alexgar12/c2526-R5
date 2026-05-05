@@ -25,11 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
-    """
-    Build a minimal single-row DataFrame from the latest Drive window when the
-    GTFS-RT feed is unavailable.  Provides enough features to run the models
-    at the cost of having no per-train lag/trip-progress information.
-    """
+
     import math
     import numpy as np
     from datetime import datetime, timezone
@@ -52,7 +48,6 @@ def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
     row = sub.iloc[0:1].copy()
     now = datetime.now(timezone.utc)
     row["merge_time"] = now
-    # Clear trip-specific fields we can't derive from the window
     for col in ("stops_to_end_mean", "scheduled_time_to_end_mean",
                 "lagged_delay_1_mean", "lagged_delay_2_mean"):
         if col not in row.columns:
@@ -61,7 +56,6 @@ def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
 
 
 async def _get_windows(request: Request) -> list:
-    """Return cached windows or download fresh ones from Drive."""
     cache = request.app.state.cache
     cached = cache.get("windows")
     if cached is not None:
@@ -77,14 +71,12 @@ async def _get_windows(request: Request) -> list:
     return windows
 
 
-# ── Current observed delay (latest window) ───────────────────────────────────
 
 @router.get("/current")
 async def get_current_delay(
     request: Request,
     stop_id: Optional[str] = Query(default=None),
 ) -> dict:
-    """Return the last observed delay_seconds from the most recent Drive window."""
     windows = await _get_windows(request)
     df = windows[-1].copy()
 
@@ -110,7 +102,6 @@ async def get_current_delay(
     return {"stop_id": stop_id, "delay_seconds": delay}
 
 
-# ── Propagation (DCRNN) ───────────────────────────────────────────────────────
 
 @router.get("/propagation", response_model=PropagationResponse)
 async def predict_propagation(
@@ -132,7 +123,6 @@ async def predict_propagation(
     )
 
 
-# ── Delay (LightGBM) ─────────────────────────────────────────────────────────
 
 @router.get("/delay/30m", response_model=DelayResponse)
 async def predict_delay_30m(
@@ -176,7 +166,6 @@ async def predict_delay_end(
     )
 
 
-# ── Delta (LightGBM binary) ───────────────────────────────────────────────────
 
 @router.get("/delta/10m", response_model=DeltaResponse)
 async def predict_delta_10m(
@@ -244,7 +233,6 @@ async def predict_delta_30m(
     )
 
 
-# ── Alerts (XGBoost) ─────────────────────────────────────────────────────────
 
 @router.get("/alerts", response_model=AlertResponse)
 async def predict_alerts(
@@ -267,7 +255,6 @@ async def predict_alerts(
     )
 
 
-# ── Per-train prediction ─────────────────────────────────────────────────────
 
 @router.get("/train")
 async def predict_train(
@@ -363,7 +350,6 @@ async def predict_train(
     }
 
 
-# ── All ───────────────────────────────────────────────────────────────────────
 
 @router.get("/all", response_model=AllPredictionsResponse)
 async def predict_all(request: Request) -> AllPredictionsResponse:

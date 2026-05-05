@@ -1,4 +1,3 @@
-"""Real-time train positions from MTA GTFS-RT feeds."""
 import logging
 import time
 
@@ -25,7 +24,6 @@ _VALID_ROUTES = {
     'S','GS','FS','H','SIR',
 }
 
-# 1 = STOPPED_AT, 0 = INCOMING_AT, 2 = IN_TRANSIT_TO
 _MOVING = frozenset({0, 2})
 
 
@@ -45,16 +43,7 @@ def fetch_positions(
     gtfs_stops: dict[str, tuple[float, float]],
     prev_stop_for_route: dict[tuple[str, str], str],
 ) -> list[dict]:
-    """
-    Returns list of train positions for all vehicles currently in the GTFS-RT feeds.
 
-    Coordinates: GTFS stop position (STOPPED_AT) or midpoint with previous stop
-    (IN_TRANSIT_TO/INCOMING_AT). Falls back to GPS position if stop unknown.
-
-    Note: MTA removes past stops from trip_update, so has_started is unreliable
-    as a filter — all trains with vehicle entities are shown regardless.
-    is_predictable is True when the train has a trip_update and stops remaining.
-    """
     results = []
 
     for feed_key, url in _FEEDS.items():

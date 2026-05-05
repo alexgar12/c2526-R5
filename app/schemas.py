@@ -22,7 +22,6 @@ class HealthResponse(BaseModel):
     data: DataStatus
 
 
-# ── Propagation (DCRNN) ───────────────────────────────────────────────────────
 
 class PropagationPrediction(BaseModel):
     stop_id: str
@@ -40,7 +39,6 @@ class PropagationResponse(BaseModel):
     predictions: list[PropagationPrediction]
 
 
-# ── Delay prediction (LightGBM) ───────────────────────────────────────────────
 
 class DelayPrediction(BaseModel):
     stop_id: str
@@ -57,7 +55,6 @@ class DelayResponse(BaseModel):
     predictions: list[DelayPrediction]
 
 
-# ── Delta classification (LightGBM) ──────────────────────────────────────────
 
 class DeltaPrediction(BaseModel):
     stop_id: str
@@ -75,7 +72,6 @@ class DeltaResponse(BaseModel):
     predictions: list[DeltaPrediction]
 
 
-# ── Alerts (XGBoost) ─────────────────────────────────────────────────────────
 
 class AlertPrediction(BaseModel):
     route_id: str
@@ -93,7 +89,6 @@ class AlertResponse(BaseModel):
     predictions: list[AlertPrediction]
 
 
-# ── Combined ─────────────────────────────────────────────────────────────────
 
 class AllPredictionsResponse(BaseModel):
     predicted_at: str

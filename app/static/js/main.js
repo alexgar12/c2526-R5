@@ -1,8 +1,3 @@
-// main.js — Metro-style rendering (líneas como trazos + burbujas por parada)
-
-// ============================================================
-// 1. Inicializar Mapa
-// ============================================================
 const map = L.map('map', {
     center: [40.7128, -74.0060],
     zoom: 12,
@@ -25,9 +20,6 @@ map.getPane('stationPane').style.pointerEvents = 'none';
 map.createPane('trainPane');
 map.getPane('trainPane').style.zIndex = 620;
 
-// ============================================================
-// 2. Paleta oficial MTA
-// ============================================================
 const ROUTE_COLORS = {
     '1': '#EE352E', '2': '#EE352E', '3': '#EE352E',
     '4': '#00933C', '5': '#00933C', '6': '#00933C',
@@ -50,9 +42,6 @@ function getStationColor(routes) {
     return ROUTE_COLORS[primaryRoute] || '#3B82F6';
 }
 
-// ============================================================
-// 3. Estado global
-// ============================================================
 let markersMap = {};
 let allStations = [];
 let stationsById = {};     // stationId -> station object
@@ -64,9 +53,6 @@ let stationRouteIndex = {}; // stationId -> [lineCode, lineCode, ...]
 const SUBWAY_STATIONS_URL = '/api/stations';
 const SUBWAY_ROUTES_URL   = '/api/routes';  // Nuevo endpoint: devuelve { lineCode: [stationId, ...] }
 
-// ============================================================
-// 4. Helpers de offset visual (para separar líneas paralelas)
-// ============================================================
 
 /**
  * Posición de cada línea dentro de su trunk line.
@@ -192,10 +178,6 @@ function offsetLatLngsMeters(points, offsetMeters) {
     });
 }
 
-// ============================================================
-// 5. Crear marcador SVG estilo metro con burbujas por línea
-// ============================================================
-
 // Radio de burbuja según nivel de zoom
 function markerRadiusForZoom(zoom) {
     if (zoom >= 16) return 10;
@@ -248,10 +230,6 @@ function createMetroMarker(routes, zoom) {
         iconAnchor: [totalW / 2, totalH / 2]
     });
 }
-
-// ============================================================
-// 6. Dibujar líneas de metro como polilíneas
-// ============================================================
 
 /**
  * El backend devuelve los IDs en el orden oficial de la línea (via _ROUTE_ORDER).
@@ -341,15 +319,6 @@ function darkenColor(hex, factor) {
     return `rgb(${Math.round(r * factor)},${Math.round(g * factor)},${Math.round(b * factor)})`;
 }
 
-// ============================================================
-// 7. Carga de datos y renderizado
-// ============================================================
-
-/**
- * Dibuja las líneas usando la geometría oficial GTFS (shapes).
- * Cada ruta tiene un trazo lat/lon que sigue el carril real de la MTA.
- * No depende de matching de nombres de estación.
- */
 let rawShapesDataCache = null;
 
 function redrawShapes() {
@@ -485,11 +454,6 @@ Promise.all([
     }
 });
 
-
-// ============================================================
-// 8. Posiciones de trenes en tiempo real
-// ============================================================
-
 const trainLayer = L.layerGroup().addTo(map);
 
 function createTrainIcon(routeId, isPredictable = true) {
@@ -563,7 +527,6 @@ async function openTrainPopup(train, marker) {
             <div class="train-popup-stop">Próxima: <strong>${stopName}</strong></div>
         </div>`;
 
-    // Unscheduled / added trains have no scheduled data → prediction is not possible
     if (!train.is_predictable) {
         const reason = train.schedule_relationship === 1 ? 'Servicio adicional' : 'Tren no programado';
         marker.bindPopup(
@@ -575,7 +538,6 @@ async function openTrainPopup(train, marker) {
         return;
     }
 
-    // Show loading state immediately
     marker.bindPopup(
         `<div>${headerHtml}<div class="train-popup-body">${metaBlock}
             <div class="train-popup-loading">Cargando predicciones…</div>
@@ -583,7 +545,6 @@ async function openTrainPopup(train, marker) {
         popupOpts
     ).openPopup();
 
-    // Call the unified per-train endpoint
     let data = null;
     try {
         const params = new URLSearchParams({ match_key: train.trip_id });
@@ -593,7 +554,6 @@ async function openTrainPopup(train, marker) {
         console.error('Error fetching train predictions:', e);
     }
 
-    // ── Build popup content from response ────────────────────────────────────
     const delayRow = (label, val) => {
         const cls  = _delayCls(val);
         const text = _fmtDelay(val);
@@ -714,9 +674,6 @@ async function refreshTrainPositions() {
 refreshTrainPositions();
 
 
-// ============================================================
-// 9. WebSocket para predicciones en tiempo real
-// ============================================================
 const wsUrl = `ws://${window.location.host}/ws/live-updates`;
 const socket = new WebSocket(wsUrl);
 
@@ -733,10 +690,6 @@ socket.onmessage = (event) => {
         }
     }
 };
-
-// ============================================================
-// 9. Actualización de marcadores con alertas
-// ============================================================
 
 function renderDelayCard(id, delaySeconds) {
     const el = document.getElementById(id);
@@ -774,10 +727,6 @@ function updateMapWithAlerts(alertPredictions) {
     });
 }
 
-// ============================================================
-// 10. Panel de detalles de estación
-// ============================================================
-
 const detailPanel  = document.getElementById('station-detail-panel');
 const closeDetailBtn = document.getElementById('close-detail');
 closeDetailBtn.onclick = () => detailPanel.classList.add('hidden');
@@ -793,7 +742,6 @@ function openStationDetails(station) {
     nameEl.textContent   = station.name;
     lineSelectors.innerHTML = '';
 
-    // Reset forecast cards immediately so old station data doesn't linger
     ['forecast-now', 'forecast-10', 'forecast-20', 'forecast-30'].forEach(id => {
         const el = document.getElementById(id);
         el.textContent = '…';
@@ -837,14 +785,12 @@ async function updateForecast(lineCode) {
 
     const stopParam = encodeURIComponent(station.id);
 
-    // Lanzar las tres peticiones en paralelo
     const [nowResp, propResp, alertResp] = await Promise.allSettled([
         fetch(`/api/predict/current?stop_id=${stopParam}`),
         fetch(`/api/predict/propagation?stop_id=${stopParam}`),
         fetch(`/api/predict/alerts?route_id=${encodeURIComponent(lineCode)}`),
     ]);
 
-    // Ahora: último delay observado en la ventana más reciente (en segundos)
     try {
         if (nowResp.status === 'fulfilled' && nowResp.value.ok) {
             const d = await nowResp.value.json();
@@ -854,7 +800,6 @@ async function updateForecast(lineCode) {
         }
     } catch { renderDelayCard('forecast-now', null); }
 
-    // +10/+20/+30 min: predicción DCRNN; fallback a LightGBM 30m si el stop no está en el grafo
     const label30 = document.getElementById('forecast-30-label');
     try {
         if (propResp.status === 'fulfilled' && propResp.value.ok) {
@@ -866,7 +811,6 @@ async function updateForecast(lineCode) {
                 renderDelayCard('forecast-20', pred.delay_20m);
                 renderDelayCard('forecast-30', pred.delay_30m);
             } else {
-                // DCRNN doesn't cover this stop — fall back to LightGBM delay 30m
                 renderDelayCard('forecast-10', null);
                 renderDelayCard('forecast-20', null);
                 try {
@@ -894,7 +838,6 @@ async function updateForecast(lineCode) {
         ['forecast-10', 'forecast-20', 'forecast-30'].forEach(id => renderDelayCard(id, null));
     }
 
-    // Probabilidad de alerta para la línea seleccionada
     try {
         if (alertResp.status === 'fulfilled' && alertResp.value.ok) {
             const d = await alertResp.value.json();
@@ -947,14 +890,6 @@ function checkActiveAlerts() {
     alertSection.classList.toggle('hidden', !hasAlert);
 }
 
-// ============================================================
-// 11. Planificador de rutas con autocompletado
-// ============================================================
-
-// ============================================================
-// 11. Búsqueda de estación con autocomplete
-// ============================================================
-
 let selectedStationRing = null;
 
 function highlightStation(station) {
@@ -1006,7 +941,6 @@ function initRoutePlanner() {
         const item = document.createElement('div');
         item.className = 'ac-item';
 
-        // Dots
         const dots = document.createElement('div');
         dots.className = 'ac-dots';
         (station.routes || '').split(' ').slice(0, 4).forEach(r => {
@@ -1016,7 +950,6 @@ function initRoutePlanner() {
             dots.appendChild(d);
         });
 
-        // Name with highlight
         const name = document.createElement('div');
         name.className = 'ac-name';
         const lo  = normalize(station.name);
@@ -1080,9 +1013,7 @@ function initRoutePlanner() {
     window.addEventListener('resize', () => { if (!dropdown.classList.contains('hidden')) reposition(); });
 }
 
-// ============================================================
-// 12. Modo claro / oscuro
-// ============================================================
+
 
 const ICON_MOON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 const ICON_SUN  = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;

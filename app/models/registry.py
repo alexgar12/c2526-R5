@@ -1,7 +1,3 @@
-"""
-Model registry: downloads wandb artifacts at startup and holds loaded models
-in memory. Supports DCRNN, LightGBM delay/end, LightGBM delta, and XGBoost alerts.
-"""
 import json
 import logging
 import tempfile
@@ -33,26 +29,23 @@ class DCRNNEntry:
 
 @dataclass
 class LGBMDelayEntry:
-    """LightGBM delay/end model with preprocessing metadata."""
-    model: Any                  # lightgbm.Booster (loaded via joblib)
-    preprocessing: dict         # label_encoders, target_encoder_stop_id, derived_features, target
+    model: Any                  
+    preprocessing: dict        
     artifact_name: str
     loaded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
 class DeltaEntry:
-    """LightGBM delta classification model with categorical vocabs."""
-    model: Any                  # lightgbm.Booster
-    preprocessing: dict         # vocabs, best_threshold, features, target_delta
+    model: Any                  
+    preprocessing: dict       
     artifact_name: str
     loaded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
 class AlertEntry:
-    """XGBoost alert classifier stored as pkl (contains model + threshold)."""
-    model: Any                  # XGBClassifier
+    model: Any                
     threshold: float
     artifact_name: str
     loaded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -92,7 +85,6 @@ class ModelRegistry:
                 raise
         raise last_exc
 
-    # ── DCRNN ─────────────────────────────────────────────────────────────────
 
     def load_dcrnn(self, entity: str, project: str, artifact_ref: str) -> None:
         try:
@@ -139,7 +131,6 @@ class ModelRegistry:
             logger.error("Failed to load DCRNN: %s", exc, exc_info=True)
             self.errors["dcrnn"] = str(exc)
 
-    # ── LightGBM delay / end ──────────────────────────────────────────────────
 
     def _load_lgbm_delay(self, entity: str, project: str, artifact_ref: str, key: str) -> None:
         try:
@@ -171,7 +162,6 @@ class ModelRegistry:
     def load_lgbm_delay_end(self, entity: str, project: str, artifact_ref: str) -> None:
         self._load_lgbm_delay(entity, project, artifact_ref, "lgbm_delay_end")
 
-    # ── LightGBM delta ────────────────────────────────────────────────────────
 
     def _load_delta(self, entity: str, project: str, artifact_ref: str, key: str) -> None:
         try:
@@ -217,7 +207,6 @@ class ModelRegistry:
     def load_delta_30m(self, entity: str, project: str, artifact_ref: str) -> None:
         self._load_delta(entity, project, artifact_ref, "delta_30m")
 
-    # ── XGBoost alertas ───────────────────────────────────────────────────────
 
     def load_alertas(self, entity: str, project: str, artifact_ref: str) -> None:
         try:

@@ -1,4 +1,3 @@
-"""LightGBM delta inference: binary classification of delay improvement."""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_preprocessing(df: pd.DataFrame, prep: dict) -> pd.DataFrame:
-    """Apply categorical vocab encoding from preprocessing JSON."""
     df = df.copy()
     vocabs: dict = prep.get("vocabs", {})
     for col, vocab in vocabs.items():
@@ -28,7 +26,6 @@ def run_delta_single(
     features: dict,
     threshold: Optional[float] = None,
 ) -> tuple[float, bool]:
-    """Run LGBM delta inference on a single-trip features dict from get_trip_features."""
     prep = entry.preprocessing
     thr = threshold if threshold is not None else float(prep.get("best_threshold", 0.5))
 
@@ -57,7 +54,6 @@ def run_delta(
     route_id_filter: Optional[str] = None,
     stop_id_filter: Optional[str] = None,
 ) -> DeltaResponse:
-    """Run LightGBM delta inference and return a DeltaResponse."""
     prep = entry.preprocessing
     thr = threshold if threshold is not None else float(prep.get("best_threshold", 0.5))
 

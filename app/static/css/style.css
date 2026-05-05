@@ -1,8 +1,4 @@
-/* ============================================================
-   style.css — Express-Bound
-   ============================================================ */
 
-/* ── Tokens de color por tema ── */
 :root {
     --bg:                   #f1f5f9;
     --text:                 #1f2937;
@@ -117,7 +113,6 @@ html[data-theme="dark"] {
     --theme-btn-hover-bg:   rgba(255, 255, 255, 0.15);
 }
 
-/* ── Reset & Base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -129,7 +124,6 @@ body {
     transition: background 0.3s ease, color 0.3s ease;
 }
 
-/* ── Mapa ── */
 #map {
     position: fixed;
     inset: 0;
@@ -138,7 +132,6 @@ body {
     z-index: 0;
 }
 
-/* ── Paneles flotantes ── */
 .over-map { position: fixed; z-index: 1000; }
 
 .glass-panel {
@@ -152,7 +145,6 @@ body {
     transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-/* ── Panel de ruta (izquierda) ── */
 .route-panel { top: 24px; left: 24px; width: 340px; }
 .route-panel header { margin-bottom: 20px; }
 
@@ -176,7 +168,6 @@ body {
     gap: 8px;
 }
 
-/* ── Botón de tema ── */
 .theme-btn {
     display: flex;
     align-items: center;
@@ -194,7 +185,6 @@ body {
 }
 .theme-btn:hover { background: var(--theme-btn-hover-bg); }
 
-/* ── Indicador LIVE ── */
 .live-indicator {
     display: flex;
     align-items: center;
@@ -228,7 +218,6 @@ body {
 
 .route-panel header p { font-size: 13px; color: var(--text-muted); }
 
-/* ── Buscador ── */
 .search-box { display: flex; flex-direction: column; gap: 4px; }
 
 .input-group { position: relative; display: flex; flex-direction: column; gap: 6px; }
@@ -269,7 +258,6 @@ body {
     font-size: 16px;
 }
 
-/* ── Autocomplete dropdown ── */
 .station-ac {
     position: fixed;
     background: var(--panel-bg);
@@ -306,7 +294,6 @@ body {
 .ac-name { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; }
 .ac-name mark { background: none; color: #3b82f6; font-weight: 700; }
 
-/* ── Station selection ring ── */
 .station-selection-ring { pointer-events: none !important; }
 .station-ring-outer {
     width: 40px; height: 40px;
@@ -324,7 +311,6 @@ body {
 
 .hidden { display: none !important; }
 
-/* ── Resultado de ruta ── */
 .route-result-container {
     margin-top: 16px;
     padding-top: 16px;
@@ -375,13 +361,11 @@ body {
     letter-spacing: 0.5px;
 }
 
-/* ── Valores de retraso ── */
 .delay-val { font-size: 14px; font-weight: 700; color: var(--text); }
 .delay-val.on-time     { color: #059669; }
 .delay-val.minor-delay { color: #d97706; }
 .delay-val.delayed     { color: #dc2626; }
 
-/* ── Panel de detalle de estación (derecha) ── */
 .detail-panel {
     top: 24px; right: 24px;
     width: 340px;
@@ -433,7 +417,6 @@ body {
 .line-bubble:hover { transform: scale(1.1); }
 .line-bubble.active { border-color: white; transform: scale(1.1); box-shadow: 0 0 0 2px rgba(0,0,0,0.15); }
 
-/* ── Alerta de estación ── */
 .alert-section { margin-bottom: 16px; }
 
 .alert-banner {
@@ -446,7 +429,6 @@ body {
 .alert-icon { font-size: 16px; }
 .alert-text { font-size: 13px; color: #b45309; font-weight: 500; }
 
-/* ── Forecast grid ── */
 .detail-body h3 {
     font-size: 12px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.8px;
@@ -472,13 +454,9 @@ body {
 .time-label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
 .forecast-card .delay-val { font-size: 16px; }
 
-/* ── Info de línea ── */
 .line-info { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
 .line-info strong { color: var(--text); }
 
-/* ============================================================
-   Marcadores y líneas metro
-   ============================================================ */
 .metro-marker {
     background: transparent !important;
     border: none !important;
@@ -498,7 +476,6 @@ body {
 .metro-line { transition: opacity 0.2s ease; }
 .metro-line:hover { opacity: 1 !important; filter: brightness(1.2); }
 
-/* ── Train popup ── */
 .train-popup-wrapper .leaflet-popup-content-wrapper {
     background: var(--popup-bg);
     backdrop-filter: blur(14px);
@@ -659,7 +636,6 @@ body {
 .loading-title { font-size: 22px; font-weight: 800; color: var(--overlay-title); letter-spacing: -0.5px; }
 .loading-sub   { font-size: 13px; color: var(--text-muted); }
 
-/* ── Station panel loading bar ── */
 .detail-loading-bar {
     position: absolute; top: 0; left: 0;
     height: 2px; width: 0%;

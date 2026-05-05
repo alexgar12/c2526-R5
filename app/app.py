@@ -1,12 +1,3 @@
-"""
-Express-Bound — Inference API
-Serves real-time MTA subway delay predictions from models stored in wandb.
-Data source: 8 × 15-min sliding windows stored in Google Drive (MTA_Realtime_Windows/).
-
-Run from project root:
-    uv run fastapi dev app/app.py        # development
-    uv run fastapi run app/app.py        # production
-"""
 import asyncio
 import io
 import json
@@ -38,7 +29,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Startup / Shutdown ────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -81,12 +71,10 @@ async def lifespan(app: FastAPI):
 
 
 def _load_stations_meta() -> dict:
-    """Load station coordinates from Drive, local CSV, or NY.gov API."""
     from app.data.drive import download_daily_file
 
     df = None
 
-    # 1) Drive (fuente principal)
     try:
         from app.data.drive import _get_service, _get_folder_id, _DEFAULT_TOKEN_PATH
         import io
@@ -133,7 +121,6 @@ def _load_stations_meta() -> dict:
 
 
 def _load_gtfs_static() -> dict:
-    """Download MTA GTFS static feed and extract shapes, stops, and stop_times index."""
     url = "http://web.mta.info/developers/data/nyct/subway/google_transit.zip"
 
     VALID_ROUTES = {
@@ -164,7 +151,6 @@ def _load_gtfs_static() -> dict:
 
         zf = zipfile.ZipFile(io.BytesIO(content))
 
-        # ── shapes ────────────────────────────────────────────────────────────
         trips = pd.read_csv(zf.open("trips.txt"))
         shapes_df = pd.read_csv(zf.open("shapes.txt"))
         shapes_df = shapes_df.sort_values(["shape_id", "shape_pt_sequence"])
@@ -215,7 +201,6 @@ def _load_gtfs_static() -> dict:
             if segments:
                 gtfs_shapes[str(route_id)] = segments
 
-        # Simplify shapes using RDP algorithm to reduce points (performance optimization)
         try:
             from rdp import rdp as rdp_simplify
             simplified_shapes = {}
@@ -230,7 +215,6 @@ def _load_gtfs_static() -> dict:
                         simplified_segs.append(seg)
                 simplified_shapes[route_id] = simplified_segs
             
-            # Count reduction
             orig_pts = sum(len(seg) for segs in gtfs_shapes.values() for seg in segs)
             simp_pts = sum(len(seg) for segs in simplified_shapes.values() for seg in segs)
             logger.info(f"GTFS shapes simplified: {orig_pts} → {simp_pts} points ({100*simp_pts/orig_pts:.1f}%)")
@@ -240,7 +224,6 @@ def _load_gtfs_static() -> dict:
 
         logger.info("GTFS shapes loaded for %d routes: %s", len(gtfs_shapes), sorted(gtfs_shapes.keys()))
 
-        # ── stops ─────────────────────────────────────────────────────────────
         stops_df = pd.read_csv(
             zf.open("stops.txt"),
             usecols=["stop_id", "stop_lat", "stop_lon"],
@@ -252,10 +235,6 @@ def _load_gtfs_static() -> dict:
         }
         logger.info("GTFS stops loaded: %d stops", len(gtfs_stops))
 
-        # ── prev_stop_for_route ───────────────────────────────────────────────
-        # Index: (route_id_norm, stop_id) -> prev_stop_id
-        # Built from the longest representative trip per (route, direction).
-        # Avoids trip_id matching issues between static GTFS and real-time feeds.
         st_df = pd.read_csv(
             zf.open("stop_times.txt"),
             usecols=["trip_id", "stop_sequence", "stop_id"],
@@ -285,7 +264,6 @@ def _load_gtfs_static() -> dict:
 
 
 def _sanitize_json(obj):
-    """Recursively replace NaN/Inf floats with None so json.dumps produces valid JSON."""
     import math
     if isinstance(obj, float) and not math.isfinite(obj):
         return None
@@ -297,7 +275,6 @@ def _sanitize_json(obj):
 
 
 async def _live_broadcast(app: FastAPI) -> None:
-    """Push latest alert predictions to WebSocket clients every 60 s."""
     while True:
         await asyncio.sleep(60)
         try:
@@ -326,8 +303,6 @@ async def _live_broadcast(app: FastAPI) -> None:
             logger.debug("Live broadcast error (non-fatal): %s", exc)
 
 
-# ── WebSocket connection manager ──────────────────────────────────────────────
-
 class _ConnectionManager:
     def __init__(self):
         self._connections: list[WebSocket] = []
@@ -351,8 +326,6 @@ class _ConnectionManager:
             self.disconnect(ws)
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
-
 app = FastAPI(
     title="Express-Bound",
     description="Real-time MTA subway delay prediction API",
@@ -366,8 +339,6 @@ templates = Jinja2Templates(directory="app/templates")
 app.include_router(health_router)
 app.include_router(predict_router, prefix="/api")
 
-
-# ── UI & WebSocket ────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
@@ -407,7 +378,6 @@ async def debug_stop(request: Request, stop_id: str):
 
     result: dict = {"stop_id": stop_id, "dcrnn": {}, "drive_windows": {}}
 
-    # DCRNN coverage
     if registry.dcrnn is not None:
         nodes = registry.dcrnn.nodes
         exact = [n for n in nodes if n == stop_id]
@@ -421,7 +391,6 @@ async def debug_stop(request: Request, stop_id: str):
     else:
         result["dcrnn"] = {"error": "DCRNN not loaded"}
 
-    # Drive window coverage
     if windows:
         df = windows[-1]
         stop_ids_in_window = df["stop_id"].astype(str).unique().tolist() if "stop_id" in df.columns else []
@@ -475,7 +444,6 @@ _ROUTE_ORDER: dict[str, list[str]] = {
 def get_routes(request: Request):
     meta = request.app.state.stations_meta
 
-    # Build an index: lowercase_name -> list of (sid, routes_set)
     name_to_candidates: dict[str, list[tuple[str, set[str]]]] = {}
     for sid, data in meta.items():
         name = str(data.get("name", "")).strip().lower()
@@ -486,11 +454,9 @@ def get_routes(request: Request):
         candidates = name_to_candidates.get(stop_name.lower(), [])
         if not candidates:
             return None
-        # Prefer a station that actually serves this line
         for sid, routes_set in candidates:
             if line in routes_set:
                 return sid
-        # Fallback: first match by name (better than nothing)
         return candidates[0][0]
 
     result = {}

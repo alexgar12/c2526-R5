@@ -1,15 +1,3 @@
-"""Google Drive client for downloading real-time sliding-window parquets.
-
-Reads from the same folder that upload_realtime_window.py maintains:
-  MTA_Realtime_Windows/
-    ventana_YYYY-MM-DD_HH-MM.parquet
-    ventana_YYYY-MM-DD_HH-MM.parquet
-    ...  (up to N_WINDOWS files, oldest deleted automatically by the ETL)
-
-Authentication mirrors upload_realtime_window.py:
-  - In CI / production: set GDRIVE_TOKEN_JSON to the token.json contents.
-  - Locally: run the OAuth flow once to generate token_drive.json.
-"""
 import io
 import logging
 import os
@@ -26,7 +14,6 @@ logger = logging.getLogger(__name__)
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _FOLDER_NAME = "MTA_Realtime_Windows"
 
-# Default token path matches upload_realtime_window.py
 _DEFAULT_TOKEN_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "src" / "ETL" / "alertas_oficiales_tiempo_real" / "token_drive.json"
@@ -49,7 +36,6 @@ def _get_service(token_path: Path) -> object:
 
 
 def _get_folder_id(service, folder_name: str, parent_id: str | None = None) -> str:
-    """Resolve folder name → folder ID, optionally restricted to a parent folder."""
     parent_clause = f"and '{parent_id}' in parents " if parent_id else ""
     result = service.files().list(
         q=(
@@ -75,19 +61,7 @@ def download_daily_file(
     root_folder: str = "MTA_Daily_Data",
     token_path: Path | None = None,
 ) -> pd.DataFrame:
-    """Download a parquet from MTA_Daily_Data (or a subfolder within it).
 
-    Matches the structure created by upload_daily_data.py:
-      MTA_Daily_Data/gtfs_supplemented/stop_times.parquet
-      MTA_Daily_Data/clima/clima_hoy.parquet
-      MTA_Daily_Data/eventos/eventos_hoy.parquet
-
-    Args:
-        filename:    file to download, e.g. "stop_times.parquet"
-        subfolder:   subfolder inside root_folder, e.g. "gtfs_supplemented"
-        root_folder: Drive root folder name (default "MTA_Daily_Data")
-        token_path:  path to token_drive.json; defaults to the shared token path.
-    """
     token_path = token_path or _DEFAULT_TOKEN_PATH
     service = _get_service(token_path)
 
@@ -128,12 +102,7 @@ def download_windows(
     token_path: Path | None = None,
     folder_name: str = _FOLDER_NAME,
 ) -> list[pd.DataFrame]:
-    """Download the most recent n_windows parquet files from the Drive folder.
 
-    Returns a list of DataFrames ordered oldest → newest.
-    Files are named ventana_YYYY-MM-DD_HH-MM.parquet; sorted lexicographically
-    which matches chronological order.
-    """
     token_path = token_path or _DEFAULT_TOKEN_PATH
     service = _get_service(token_path)
     folder_id = _get_folder_id(service, folder_name)

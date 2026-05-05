@@ -1,4 +1,3 @@
-"""DCRNN inference: spatiotemporal delay propagation per station."""
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -19,15 +18,7 @@ def run_propagation(
     stop_id_filter: Optional[str] = None,
     route_id_filter: Optional[str] = None,
 ) -> PropagationResponse:
-    """Run DCRNN inference and return a PropagationResponse.
 
-    Args:
-        entry:          Loaded DCRNNEntry from the registry.
-        windows:        List of 15-min DataFrames (oldest → newest).
-        stations_meta:  Optional dict {stop_id: {lat, lon}} for coordinates.
-        stop_id_filter: If set, return only this station.
-        route_id_filter: If set, return only stations served by this route.
-    """
     X = windows_to_dcrnn_tensor(
         windows=windows,
         nodes=entry.nodes,
@@ -41,7 +32,6 @@ def run_propagation(
     # y_hat: (1, 1, N, 3) → (N, 3)
     y_scaled = y_hat.squeeze(0).squeeze(0).cpu().numpy()
 
-    # Inverse-transform predictions to seconds
     import numpy as np
     N, H = y_scaled.shape
     y_sec = entry.scaler_Y.inverse_transform(y_scaled.reshape(-1, H)).reshape(N, H)
@@ -49,13 +39,11 @@ def run_propagation(
     nodes_sorted = sorted(entry.nodes)
     predictions: list[PropagationPrediction] = []
 
-    # GTFS nodes carry a directional suffix (N/S); the base ID (without suffix)
-    # matches the GTFS Stop ID used in station metadata and in the JS.
+
     def _base(sid: str) -> str:
         return sid[:-1] if sid and sid[-1] in ("N", "S") else sid
 
     if stop_id_filter:
-        # Collect N and S variants for this base GTFS stop ID and average them.
         matched = [i for i, sid in enumerate(nodes_sorted)
                    if sid == stop_id_filter or _base(sid) == stop_id_filter]
         if not matched:
