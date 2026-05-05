@@ -10,8 +10,6 @@ notebooks/
 docs/
 .env
 *.env
-.claude/
-CLAUDE.md
 
 # Training and research — not needed at runtime
 src/models/prediccion_retrasos/

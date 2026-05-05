@@ -224,20 +224,21 @@ uv run python generar_token_drive.py
 
 #### Opción B — Crear tu propio OAuth Client (Desktop app)
 
-1. En Google Cloud Console → APIs & Services → Credentials.
-2. Pasa la OAuth consent screen.
-3. En Google Cloud Console → APIs & Services → OAuth consent screen → Audience / Público
-4. En la sección Test Users: Add user: insertar tu email
-5. Create credentials → OAuth client ID.
-6. Application type: Desktop app.
-7. Descarga el JSON y guárdalo como `credentials.json` en la raíz del repo.
-8. Ejecutar:
+1. Entra a Google Cloud Console → Crea un proyecto nuevo o selecciona uno existente.
+2. Ve a APIs & Services → Credentials.
+3. Pasa la OAuth consent screen.
+4. En Google Cloud Console → APIs & Services → OAuth consent screen → Audience / Público
+5. En la sección Test Users: Add user: insertar tu email
+6. Create credentials → OAuth client ID.
+7. Application type: Desktop app.
+8. Descarga el JSON y guárdalo como `credentials.json` en la raíz del repo.
+9. Ejecutar:
 
 ```bash
 python generar_token_drive.py
 ```
-9. Inicia sesión con tu cuenta cuando se te redireccione.
-10. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
+10. Inicia sesión con tu cuenta cuando se te redireccione.
+11. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
 
 ### Weights & Biases (W&B)
 
