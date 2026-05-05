@@ -215,6 +215,29 @@ def _load_gtfs_static() -> dict:
             if segments:
                 gtfs_shapes[str(route_id)] = segments
 
+        # Simplify shapes using RDP algorithm to reduce points (performance optimization)
+        try:
+            from rdp import rdp as rdp_simplify
+            simplified_shapes = {}
+            for route_id, segments in gtfs_shapes.items():
+                simplified_segs = []
+                for seg in segments:
+                    if len(seg) > 10:
+                        # RDP with epsilon=0.0002 degrees (~22 meters) provides good compression
+                        simplified_seg = rdp_simplify(seg, 0.0002)
+                        simplified_segs.append(simplified_seg)
+                    else:
+                        simplified_segs.append(seg)
+                simplified_shapes[route_id] = simplified_segs
+            
+            # Count reduction
+            orig_pts = sum(len(seg) for segs in gtfs_shapes.values() for seg in segs)
+            simp_pts = sum(len(seg) for segs in simplified_shapes.values() for seg in segs)
+            logger.info(f"GTFS shapes simplified: {orig_pts} → {simp_pts} points ({100*simp_pts/orig_pts:.1f}%)")
+            gtfs_shapes = simplified_shapes
+        except Exception as e:
+            logger.warning(f"Could not simplify shapes: {e}, using unsimplified")
+
         logger.info("GTFS shapes loaded for %d routes: %s", len(gtfs_shapes), sorted(gtfs_shapes.keys()))
 
         # ── stops ─────────────────────────────────────────────────────────────

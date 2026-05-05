@@ -33,6 +33,7 @@ dependencies = [
   "protobuf",
   "bs4>=0.0.2",
   "geopy>=2.4.1",
+  "rdp>=0.8",
 ]
 
 [dependency-groups]

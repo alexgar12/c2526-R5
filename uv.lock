@@ -269,6 +269,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "pytz" },
+    { name = "rdp" },
     { name = "requests" },
     { name = "requests-cache" },
     { name = "retry-requests" },
@@ -317,6 +318,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "pytz" },
+    { name = "rdp", specifier = ">=0.8" },
     { name = "requests" },
     { name = "requests-cache" },
     { name = "retry-requests" },
@@ -2921,6 +2923,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/fb/1c859d6014f1177bbdc7ffdc77b006ee4a7e4c2b133a3dd465c9e0d1c45f/qh3-1.7.4-cp37-abi3-win_amd64.whl", hash = "sha256:f6a4c68b22bdff3715dcf712378b7a65c92f2a9b9b816f0e9d2bcffd17ba8e06", size = 2008631, upload-time = "2026-04-28T05:13:08.56Z" },
     { url = "https://files.pythonhosted.org/packages/d4/fb/2c74d9071c741f7bff62f32e5c85496d5b35362a5ddbf79c4abc1d360aca/qh3-1.7.4-cp37-abi3-win_arm64.whl", hash = "sha256:67264af98503a5aa9dd522d09144cf94871e64d0de72f55ac41ab6c9f6961568", size = 1844555, upload-time = "2026-04-28T05:13:10.348Z" },
 ]
+
+[[package]]
+name = "rdp"
+version = "0.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/42/80a54cc4387256335c32b48bd42db80967ab5f40d6ffcd8167b3dd988c11/rdp-0.8.tar.gz", hash = "sha256:19ec92f0803587891a00b439441e5e23fc9410500983f02941e4cf9ac3113e4b", size = 4382, upload-time = "2016-12-19T01:34:07.454Z" }
 
 [[package]]
 name = "requests"

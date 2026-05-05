@@ -243,7 +243,7 @@ def compare_predictions(history: PredictionHistory):
         new_val = extract_delay_value(current)
         if old_val is not None and new_val is not None:
             diff = new_val - old_val
-            print(f"\n📊 DELAY 30m (predicción hace 10min vs actual):")
+            print(f"\nDELAY 30m (predicción hace 10min vs actual):")
             print(f"   Predicho hace 10min: {old_val:.1f} seg ({old_val/60:.1f} min)")
             print(f"   Valor actual:        {new_val:.1f} seg ({new_val/60:.1f} min)")
             print(f"   Diferencia:          {diff:+.1f} seg ({diff/60:+.1f} min)")
@@ -258,7 +258,7 @@ def compare_predictions(history: PredictionHistory):
         new_val = extract_delay_value(current_end)
         if old_val is not None and new_val is not None:
             diff = new_val - old_val
-            print(f"\n📊 DELAY END (predicción hace 10min vs actual):")
+            print(f"\nDELAY END (predicción hace 10min vs actual):")
             print(f"   Predicho hace 10min: {old_val:.1f} seg ({old_val/60:.1f} min)")
             print(f"   Valor actual:        {new_val:.1f} seg ({new_val/60:.1f} min)")
             print(f"   Diferencia:          {diff:+.1f} seg ({diff/60:+.1f} min)")
@@ -273,7 +273,7 @@ def compare_predictions(history: PredictionHistory):
         new_val = extract_alert_value(current_alerts)
         if old_val is not None and new_val is not None:
             diff = new_val - old_val
-            print(f"\n📊 ALERTS (predicción hace 10min vs actual):")
+            print(f"\nALERTS (predicción hace 10min vs actual):")
             print(f"   Predicho hace 10min: {old_val:.3f}")
             print(f"   Valor actual:        {new_val:.3f}")
             print(f"   Diferencia:          {diff:+.3f}")
@@ -283,7 +283,7 @@ def compare_predictions(history: PredictionHistory):
     pred_10m_ago_prop = history.get_prediction_at("propagation", 10)
     current_prop = history.get_prediction_at("propagation", 0)
     if pred_10m_ago_prop and current_prop:
-        print(f"\n📊 PROPAGACIÓN (selección de estaciones):")
+        print(f"\nPROPAGACIÓN (selección de estaciones):")
         station_comparisons = compare_propagation_by_station(pred_10m_ago_prop, current_prop, count=5)
         if station_comparisons:
             for station in station_comparisons:
@@ -302,7 +302,7 @@ def compare_predictions(history: PredictionHistory):
             print("   No hay coincidencias de estaciones entre predicciones antiguas y actuales.")
     
     # Mostrar historial disponible
-    print(f"\n📋 Historial disponible:")
+    print(f"\nHistorial disponible:")
     for name, entries in history.history.items():
         if entries:
             ages = [(now - e["timestamp"]).total_seconds() / 60 for e in entries]
@@ -330,7 +330,7 @@ async def run_comparison(interval_minutes: int, base_url: str, once: bool):
                 print(f"\n--- {name.upper()} ---")
                 print(json.dumps(pred, indent=2, default=str))
             
-            print("\n⚠️  Ejecuta de nuevo después de 10 minutos para ver comparaciones")
+            print("\nEjecuta de nuevo después de 10 minutos para ver comparaciones")
         else:
             # Ciclo continuo
             while True:

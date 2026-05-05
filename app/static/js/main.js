@@ -366,8 +366,6 @@ function redrawShapes() {
 
         const parallel = ROUTE_PARALLEL_INDEX[routeCode] || { idx: 0, total: 1 };
         const centerOffset = (parallel.total - 1) / 2;
-        // offsetOverride permite asignar un offset fijo en metros (independiente de idx/total)
-        // Útil cuando dos rutas comparten vía solo en algunas secciones (ej. 2 y 5 en Brooklyn).
         const offsetIndex = parallel.offsetOverride !== undefined
             ? parallel.offsetOverride / OFFSET_METERS
             : (parallel.idx - centerOffset);
@@ -382,7 +380,7 @@ function redrawShapes() {
             if (offsetIndex === 0 && segIdx === 0) {
                 const border = L.polyline(points, {
                     color: darkenColor(color, 0.4),
-                    weight: 7,
+                    weight: 5,
                     opacity: 0.5,
                     lineJoin: 'round',
                     lineCap: 'round'
@@ -390,10 +388,11 @@ function redrawShapes() {
                 borderPolylines.push(border);
             }
 
+            // Línea principal (ligeramente más delgada para performance)
             const poly = L.polyline(latlngs, {
                 color: color,
-                weight: 3.5,
-                opacity: 0.88,
+                weight: 3,
+                opacity: 0.85,
                 lineJoin: 'round',
                 lineCap: 'round',
                 className: `metro-line metro-line-${routeCode}`
@@ -408,7 +407,7 @@ function drawShapeLines(shapesData) {
     rawShapesDataCache = shapesData;
     redrawShapes();
     
-    // Ocultar líneas al empezar el zoom y redibujar al terminar (evita descuadre visual)
+    // Ocultar líneas al empezar el zoom y redibujar al terminar
     map.on('zoomstart', () => {
         Object.values(routePolylines).forEach(p => {
             if (p && p.getElement) {
@@ -421,7 +420,7 @@ function drawShapeLines(shapesData) {
         redrawShapes();
     });
     
-    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas con offsets geográficos fijos.`);
+    console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas.`);
 }
 
 
