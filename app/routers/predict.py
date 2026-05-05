@@ -1,3 +1,32 @@
+"""
+Router de los endpoints de predicción de la API Express-Bound.
+
+Expone los endpoints GET /api/predict/* para ejecutar los modelos ML sobre
+los datos en tiempo real descargados de Google Drive. Los endpoints disponibles son:
+
+- /predict/current: retraso actual observado (sin modelo, solo datos).
+- /predict/propagation: propagación de retraso a 10/20/30 min (DCRNN).
+- /predict/delay/30m: retraso absoluto en 30 minutos (LightGBM).
+- /predict/delay/end: retraso absoluto al final del recorrido (LightGBM).
+- /predict/delta/10m|20m|30m: tendencia de retraso en cada horizonte (LightGBM).
+- /predict/alerts: alertas de incidencia por línea y dirección (XGBoost).
+- /predict/train: predicción individual para un tren concreto (match_key).
+- /predict/all: todos los modelos ejecutados de forma concurrente.
+
+Dependencias:
+- app.data.drive.download_windows: descarga ventanas de Drive si no están en caché.
+- app.models.*_infer: funciones de inferencia de cada modelo.
+- src.ETL.pipelines.realtime.preprocess_realtime_lgbm.get_trip_features: extrae
+  features de un tren concreto desde el feed GTFS-RT.
+- app.schemas: esquemas Pydantic para las respuestas.
+
+Notas:
+- Las ventanas de Drive se cachean en app.state.cache con TTL configurado en settings.
+- Todos los modelos pesados se ejecutan en hilos separados (asyncio.to_thread) para
+  no bloquear el event loop de FastAPI.
+- Si un modelo no está cargado, el endpoint devuelve HTTP 503 con el motivo del error.
+"""
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -25,7 +54,21 @@ logger = logging.getLogger(__name__)
 
 
 def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
+    """
+    Construye una fila de features de fallback desde la última ventana de Drive.
 
+    Se usa cuando get_trip_features no puede obtener datos del feed GTFS-RT para
+    un tren concreto. Busca en la última ventana una fila con el stop_id indicado;
+    si no la encuentra, usa la media a nivel de ruta.
+
+    Parámetros:
+        windows: Lista de DataFrames de ventanas de Drive.
+        route_id: Identificador de la línea del tren.
+        stop_id: Identificador GTFS de la parada actual.
+
+    Retorna:
+        DataFrame de una fila con las features del fallback, o None si no hay datos.
+    """
     import math
     import numpy as np
     from datetime import datetime, timezone
@@ -38,7 +81,7 @@ def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
     mask = (df["stop_id"].astype(str) == stop_id) | (base == stop_id)
     sub = df[mask]
     if sub.empty:
-        # Fall back to route-level average
+        # Si no se encuentra el stop_id exacto, usar la media a nivel de ruta
         route_norm = route_id.strip().split("-")[0].split("_")[0]
         if "route_id" in df.columns:
             sub = df[df["route_id"].astype(str) == route_norm]
@@ -56,6 +99,19 @@ def _drive_window_fallback(windows: list, route_id: str, stop_id: str):
 
 
 async def _get_windows(request: Request) -> list:
+    """
+    Obtiene las ventanas de datos desde la caché o las descarga de Drive si han expirado.
+
+    Comprueba primero la caché TTL de la aplicación; si no hay datos válidos, descarga
+    las N ventanas más recientes de la carpeta de Drive configurada y las cachea.
+
+    Parámetros:
+        request: Objeto Request de FastAPI (accede a app.state.cache).
+
+    Retorna:
+        Lista de DataFrames con las ventanas de datos en tiempo real, ordenadas
+        de más antigua a más reciente.
+    """
     cache = request.app.state.cache
     cached = cache.get("windows")
     if cached is not None:
@@ -71,13 +127,26 @@ async def _get_windows(request: Request) -> list:
     return windows
 
 
-
 @router.get("/current")
 async def get_current_delay(
     request: Request,
     stop_id: Optional[str] = Query(default=None),
     route_id: Optional[str] = Query(default=None),
 ) -> dict:
+    """
+    Devuelve el retraso medio observado actualmente para un stop_id y/o route_id.
+
+    No usa modelos ML: simplemente agrega el campo delay_seconds_mean de la
+    última ventana de datos de Drive, filtrando por los parámetros indicados.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        stop_id: Parada a consultar (exacto o base sin sufijo N/S, opcional).
+        route_id: Línea a consultar (se normaliza eliminando sufijos, opcional).
+
+    Retorna:
+        Dict con 'stop_id' y 'delay_seconds' (float o None si no hay datos).
+    """
     windows = await _get_windows(request)
     df = windows[-1].copy()
 
@@ -104,13 +173,26 @@ async def get_current_delay(
     return {"stop_id": stop_id, "delay_seconds": delay}
 
 
-
 @router.get("/propagation", response_model=PropagationResponse)
 async def predict_propagation(
     request: Request,
     stop_id: Optional[str] = Query(default=None),
     route_id: Optional[str] = Query(default=None),
 ) -> PropagationResponse:
+    """
+    Ejecuta el modelo DCRNN y devuelve predicciones de propagación de retraso.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        stop_id: Filtra la respuesta a una parada concreta (opcional).
+        route_id: Filtra la respuesta a una línea concreta (opcional).
+
+    Retorna:
+        PropagationResponse con predicciones a 10, 20 y 30 minutos por parada.
+
+    Lanza:
+        HTTPException 503 si el modelo DCRNN no está disponible.
+    """
     registry = request.app.state.registry
     if registry.dcrnn is None:
         raise HTTPException(503, detail=f"DCRNN not available: {registry.errors.get('dcrnn', 'not loaded')}")
@@ -125,7 +207,6 @@ async def predict_propagation(
     )
 
 
-
 @router.get("/delay/30m", response_model=DelayResponse)
 async def predict_delay_30m(
     request: Request,
@@ -133,6 +214,21 @@ async def predict_delay_30m(
     stop_id: Optional[str] = Query(default=None),
     min_delay: float = Query(default=0.0, ge=0),
 ) -> DelayResponse:
+    """
+    Ejecuta el modelo LightGBM y devuelve predicciones de retraso en 30 minutos.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra por línea (opcional).
+        stop_id: Filtra por parada (opcional).
+        min_delay: Umbral mínimo de retraso en segundos para incluir en la respuesta.
+
+    Retorna:
+        DelayResponse con las predicciones de retraso en segundos y minutos.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.lgbm_delay_30m is None:
         raise HTTPException(503, detail=f"delay/30m not available: {registry.errors.get('lgbm_delay_30m', 'not loaded')}")
@@ -154,6 +250,21 @@ async def predict_delay_end(
     stop_id: Optional[str] = Query(default=None),
     min_delay: float = Query(default=0.0, ge=0),
 ) -> DelayResponse:
+    """
+    Ejecuta el modelo LightGBM y devuelve predicciones de retraso al final del recorrido.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra por línea (opcional).
+        stop_id: Filtra por parada (opcional).
+        min_delay: Umbral mínimo de retraso en segundos para incluir en la respuesta.
+
+    Retorna:
+        DelayResponse con las predicciones de retraso en segundos y minutos.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.lgbm_delay_end is None:
         raise HTTPException(503, detail=f"delay/end not available: {registry.errors.get('lgbm_delay_end', 'not loaded')}")
@@ -168,7 +279,6 @@ async def predict_delay_end(
     )
 
 
-
 @router.get("/delta/10m", response_model=DeltaResponse)
 async def predict_delta_10m(
     request: Request,
@@ -176,6 +286,21 @@ async def predict_delta_10m(
     stop_id: Optional[str] = Query(default=None),
     threshold: Optional[float] = Query(default=None, ge=0.0, le=1.0),
 ) -> DeltaResponse:
+    """
+    Ejecuta el modelo delta y devuelve predicciones de tendencia de retraso a 10 minutos.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra por línea (opcional).
+        stop_id: Filtra por parada (opcional).
+        threshold: Umbral de clasificación [0,1]. Si es None, usa el del artefacto.
+
+    Retorna:
+        DeltaResponse con la probabilidad de mejora y la clasificación por parada.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.delta_10m is None:
         raise HTTPException(503, detail=f"delta/10m not available: {registry.errors.get('delta_10m', 'not loaded')}")
@@ -198,6 +323,21 @@ async def predict_delta_20m(
     stop_id: Optional[str] = Query(default=None),
     threshold: Optional[float] = Query(default=None, ge=0.0, le=1.0),
 ) -> DeltaResponse:
+    """
+    Ejecuta el modelo delta y devuelve predicciones de tendencia de retraso a 20 minutos.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra por línea (opcional).
+        stop_id: Filtra por parada (opcional).
+        threshold: Umbral de clasificación [0,1]. Si es None, usa el del artefacto.
+
+    Retorna:
+        DeltaResponse con la probabilidad de mejora y la clasificación por parada.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.delta_20m is None:
         raise HTTPException(503, detail=f"delta/20m not available: {registry.errors.get('delta_20m', 'not loaded')}")
@@ -220,6 +360,21 @@ async def predict_delta_30m(
     stop_id: Optional[str] = Query(default=None),
     threshold: Optional[float] = Query(default=None, ge=0.0, le=1.0),
 ) -> DeltaResponse:
+    """
+    Ejecuta el modelo delta y devuelve predicciones de tendencia de retraso a 30 minutos.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra por línea (opcional).
+        stop_id: Filtra por parada (opcional).
+        threshold: Umbral de clasificación [0,1]. Si es None, usa el del artefacto.
+
+    Retorna:
+        DeltaResponse con la probabilidad de mejora y la clasificación por parada.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.delta_30m is None:
         raise HTTPException(503, detail=f"delta/30m not available: {registry.errors.get('delta_30m', 'not loaded')}")
@@ -235,7 +390,6 @@ async def predict_delta_30m(
     )
 
 
-
 @router.get("/alerts", response_model=AlertResponse)
 async def predict_alerts(
     request: Request,
@@ -243,6 +397,21 @@ async def predict_alerts(
     min_prob: float = Query(default=0.0, ge=0.0, le=1.0),
     threshold: Optional[float] = Query(default=None, ge=0.0, le=1.0),
 ) -> AlertResponse:
+    """
+    Ejecuta el modelo XGBoost de alertas y devuelve predicciones por línea y dirección.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        route_id: Filtra la respuesta a una línea concreta (opcional).
+        min_prob: Probabilidad mínima para incluir una predicción en la respuesta.
+        threshold: Umbral de clasificación [0,1]. Si es None, usa el del artefacto.
+
+    Retorna:
+        AlertResponse con la probabilidad de alerta y la clasificación por línea.
+
+    Lanza:
+        HTTPException 503 si el modelo no está disponible.
+    """
     registry = request.app.state.registry
     if registry.alertas is None:
         raise HTTPException(503, detail=f"alerts not available: {registry.errors.get('alertas', 'not loaded')}")
@@ -257,20 +426,30 @@ async def predict_alerts(
     )
 
 
-
 @router.get("/train")
 async def predict_train(
     request: Request,
     match_key: str = Query(..., description="match_key del tren (trip_id GTFS-RT)"),
 ) -> dict:
     """
-    Per-train predictions.
+    Ejecuta predicciones individuales para un tren concreto identificado por su match_key.
 
-    Construye las features del trip con get_trip_features(match_key), aplica
-    encoding y ejecuta:
-      - lgbm_delay_end   si scheduled_time_to_end < 30 min
-      - lgbm_delay_30m   en caso contrario
-      - delta_10m / delta_20m / delta_30m
+    Obtiene las features del viaje con get_trip_features(match_key) y ejecuta en paralelo:
+    - lgbm_delay_end: si el tiempo restante es menor de 30 minutos.
+    - lgbm_delay_30m: si el tiempo restante es mayor o igual a 30 minutos.
+    - delta_10m, delta_20m, delta_30m: en todos los casos.
+
+    Si get_trip_features devuelve None (tren no encontrado, ya terminado o no programado),
+    devuelve una respuesta con predictable=False y el motivo clasificado.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+        match_key: Identificador del viaje en el feed GTFS-RT (trip_id canónico).
+
+    Retorna:
+        Dict con route_id, stop_id, retraso actual, paradas restantes, tiempo restante
+        y las predicciones de cada modelo disponible (None si el modelo no está cargado
+        o falló para este viaje).
     """
     registry = request.app.state.registry
 
@@ -295,10 +474,21 @@ async def predict_train(
     route_id              = str(features.get("route_id", ""))
     stop_id               = str(features.get("stop_id", ""))
 
-    # < 30 min: solo delay_end; >= 30 min: delay_30m + delay_end
+    # Si quedan menos de 30 minutos, solo se predice delay_end; en caso contrario ambos modelos
     near_end = scheduled_time_to_end < 1800
 
     async def _safe(name: str, fn, **kw):
+        """
+        Ejecuta una función de inferencia en un hilo y captura errores sin propagar.
+
+        Parámetros:
+            name: Nombre del modelo (para el log de warning).
+            fn: Función de inferencia a ejecutar.
+            **kw: Argumentos de palabra clave para la función.
+
+        Retorna:
+            El resultado de fn o None si ocurre alguna excepción.
+        """
         try:
             return await asyncio.to_thread(fn, **kw)
         except Exception as exc:
@@ -332,6 +522,15 @@ async def predict_train(
     res = dict(zip(coros.keys(), results_list))
 
     def _fmt_delta(result):
+        """
+        Formatea el resultado de un modelo delta para la respuesta JSON.
+
+        Parámetros:
+            result: Tupla (prob, mejora_predicted) o None si el modelo no produjo resultado.
+
+        Retorna:
+            Dict con 'mejora_prob' y 'mejora_predicted', o None si result es None.
+        """
         if result is None:
             return None
         prob, mejora = result
@@ -352,16 +551,38 @@ async def predict_train(
     }
 
 
-
 @router.get("/all", response_model=AllPredictionsResponse)
 async def predict_all(request: Request) -> AllPredictionsResponse:
-    """Run all available models concurrently."""
+    """
+    Ejecuta todos los modelos disponibles de forma concurrente y devuelve sus resultados.
+
+    Los modelos que no estén cargados producen None en el campo correspondiente y
+    su error se registra en el campo 'errors' de la respuesta. Los modelos cargados
+    se ejecutan en paralelo para minimizar la latencia total.
+
+    Parámetros:
+        request: Objeto Request de FastAPI.
+
+    Retorna:
+        AllPredictionsResponse con los resultados de todos los modelos disponibles,
+        el timestamp de predicción y un dict de errores para los modelos que fallaron.
+    """
     registry = request.app.state.registry
     windows = await _get_windows(request)
     predicted_at = datetime.now(timezone.utc).isoformat()
     errors: dict[str, str] = {}
 
     async def _safe(name: str, coro):
+        """
+        Ejecuta una corutina de inferencia capturando errores sin propagar.
+
+        Parámetros:
+            name: Nombre del modelo (para el log de error y el dict errors).
+            coro: Corutina a ejecutar.
+
+        Retorna:
+            El resultado de la corutina o None si ocurre alguna excepción.
+        """
         try:
             return await coro
         except Exception as exc:
@@ -370,6 +591,7 @@ async def predict_all(request: Request) -> AllPredictionsResponse:
             return None
 
     def _thread(fn, **kw):
+        """Envuelve una función bloqueante para ejecutarla en un hilo del executor."""
         return asyncio.to_thread(fn, **kw)
 
     tasks = {

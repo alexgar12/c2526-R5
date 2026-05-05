@@ -1,3 +1,27 @@
+"""
+Inferencia del modelo DCRNN (Diffusion Convolutional Recurrent Neural Network) de propagación de retrasos.
+
+Dado un conjunto de ventanas de datos en tiempo real, construye el tensor de
+entrada para el DCRNN, ejecuta la inferencia en modo sin gradiente y aplica una
+calibración en tiempo de inferencia que combina la salida del modelo con una
+estimación de persistencia del retraso observado.
+
+Calibración en tiempo de inferencia:
+El modelo DCRNN tiende a predecir valores cercanos a 0–3 segundos para casi todos
+los nodos, porque en inferencia las ventanas en tiempo real cubren solo ~13% de los
+nodos del grafo y la GNN suaviza el nodo activo contra ~1900 vecinos en reposo.
+Para compensar esto, se combina la salida del modelo con un baseline de persistencia
+del retraso observado, decaído exponencialmente según el horizonte temporal:
+  - Factores de decaimiento (exp(-h/τ), τ≈22 min): 0.64 / 0.40 / 0.25 a 10/20/30 min.
+  - Factor de antigüedad: cada ventana de 15 min hacia atrás reduce la contribución × 0.75.
+
+Dependencias:
+- app.data.transforms.windows_to_dcrnn_tensor: construye el tensor de entrada.
+- app.models.registry.DCRNNEntry: contenedor del modelo, escaladores y grafo cargados.
+- app.schemas.PropagationPrediction / PropagationResponse: esquemas de respuesta.
+- torch: para la inferencia en CPU sin gradiente.
+"""
+
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -18,7 +42,29 @@ def run_propagation(
     stop_id_filter: Optional[str] = None,
     route_id_filter: Optional[str] = None,
 ) -> PropagationResponse:
+    """
+    Ejecuta el modelo DCRNN y devuelve predicciones de retraso propagado a 10, 20 y 30 minutos.
 
+    Pasos principales:
+    1. Construye el tensor de entrada (1, history_len, N, F) con windows_to_dcrnn_tensor.
+    2. Ejecuta la red DCRNN sin gradiente y desnormaliza la salida con scaler_Y.
+    3. Aplica la calibración de persistencia: suma al output del modelo el retraso
+       observado en las ventanas, ponderado por antigüedad y decaimiento temporal.
+    4. Filtra los resultados por stop_id y/o route_id si se especifican.
+
+    Parámetros:
+        entry: Contenedor DCRNNEntry con el modelo, escaladores, nodos y grafo.
+        windows: Lista de DataFrames de ventanas de datos en tiempo real.
+        stations_meta: Dict opcional de stop_id → {lat, lon, ...} para añadir
+                       coordenadas a las predicciones.
+        stop_id_filter: Si se especifica, solo se devuelve la predicción para esa parada.
+                        Se busca por stop_id exacto o por base (sin sufijo N/S).
+        route_id_filter: Si se especifica, filtra los nodos por línea.
+
+    Retorna:
+        PropagationResponse con las predicciones de retraso por parada,
+        el timestamp de predicción y el número de estaciones.
+    """
     X = windows_to_dcrnn_tensor(
         windows=windows,
         nodes=entry.nodes,
@@ -29,7 +75,7 @@ def run_propagation(
 
     with torch.no_grad():
         y_hat = entry.model(X, entry.edge_index, entry.edge_weight)
-    # y_hat: (1, 1, N, 3) → (N, 3)
+    # y_hat tiene forma (1, 1, N, 3) → se aplana a (N, 3)
     y_scaled = y_hat.squeeze(0).squeeze(0).cpu().numpy()
 
     import numpy as np
@@ -39,17 +85,9 @@ def run_propagation(
     nodes_sorted = sorted(entry.nodes)
     predictions: list[PropagationPrediction] = []
 
-    # Inference-time calibration. The model is biased toward predicting near
-    # mean_Y - 0.16·std_Y (≈ 0–3 s) for nearly every node because the realtime
-    # windows are far sparser than training (≈13 % node coverage) and the GNN
-    # smooths a single hot node against ~1900 calm neighbours. Blend the raw
-    # model output with the observed current delay decayed exponentially over
-    # the horizon (τ ≈ 22 min ⇒ factors at 10/20/30 min ≈ 0.64/0.40/0.25). The
-    # model output then acts as a small additive correction to the persistence
-    # baseline rather than the dominant signal.
-    # Decay factors: exp(-h / τ) with τ ≈ 22 min → 0.64 / 0.40 / 0.25 at 10/20/30 min.
-    # Age decay: each 15-min window back reduces the baseline by 0.75 so a delay
-    # seen 30 min ago contributes less than one seen in the latest slot.
+    # Calibración en tiempo de inferencia:
+    # Factores de decaimiento: exp(-h/τ) con τ≈22 min → 0.64/0.40/0.25 a 10/20/30 min.
+    # Factor de antigüedad: cada ventana de 15 min atrás reduce la contribución × 0.75.
     DECAY = np.array([0.64, 0.40, 0.25], dtype=np.float32)
     AGE_DECAY = 0.75
 
@@ -58,7 +96,7 @@ def run_propagation(
         need_cols = {"delay_seconds_mean", "stop_id", "route_id"}
         valid_windows = [w for w in windows if need_cols.issubset(w.columns)]
         if valid_windows:
-            # Tag each window with its age (0 = latest) then concat once.
+            # Etiquetar cada ventana con su antigüedad (0 = más reciente) y concatenar.
             tagged = []
             for age, win in enumerate(reversed(valid_windows)):
                 tmp = win[["route_id", "stop_id", "delay_seconds_mean"]].copy()
@@ -67,7 +105,7 @@ def run_propagation(
             all_wins = pd.concat(tagged, ignore_index=True)
             all_wins["node_key"] = all_wins["route_id"].astype(str) + "_" + all_wins["stop_id"].astype(str)
 
-            # For each node keep the most recent (lowest age) observation.
+            # Para cada nodo, conservar solo la observación más reciente (menor age).
             all_wins = all_wins.sort_values("age")
             best = (
                 all_wins.dropna(subset=["delay_seconds_mean"])
@@ -84,16 +122,19 @@ def run_propagation(
 
 
     def _split(sid: str) -> tuple[str, str]:
+        """Divide un node_key 'route_stop_id' en (route, stop_id)."""
         parts = sid.split("_", 1)
         if len(parts) == 2:
             return parts[0], parts[1]
         return "", sid
 
     def _base(sid: str) -> str:
+        """Elimina el sufijo de dirección N/S de un stop_id."""
         _, stop = _split(sid)
         return stop[:-1] if stop and stop[-1] in ("N", "S") else stop
 
     def _route_matches(node_route: str, filt: str) -> bool:
+        """Comprueba si el route_id de un nodo coincide con el filtro indicado."""
         if not filt:
             return True
         norm = filt.strip().split("-")[0].split("_")[0]
@@ -112,10 +153,9 @@ def run_propagation(
                 stop_id_filter, route_id_filter, len(nodes_sorted), nodes_sorted[:5],
             )
         if matched:
-            # Take the max across matched nodes (typically the two N/S directions
-            # of the requested route). Averaging dilutes the active-direction
-            # signal with the zero-padded direction whenever the realtime feed
-            # only has rows for one of the two.
+            # Tomar el máximo entre los nodos coincidentes (tipicamente N y S de la misma parada).
+            # Se usa el máximo en lugar de la media para no diluir la señal de la dirección activa
+            # cuando el feed solo tiene datos para una de las dos direcciones.
             agg = y_sec[matched].max(axis=0)
             base_meta = (stations_meta or {}).get(stop_id_filter, {})
             predictions.append(PropagationPrediction(
