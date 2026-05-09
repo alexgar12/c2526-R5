@@ -8,7 +8,6 @@ Combina:
   • 4 esquemas de pesos (uniform / linear / exponential / step)
   Total: 28 combinaciones
 
-Duración estimada: ~1-2h (28 fits × ~3-4 min/fit)
 
 Uso:
     uv run python src/models/prediccion_retrasos/delay_30m/search/window_weight_search.py
