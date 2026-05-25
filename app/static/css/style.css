@@ -461,10 +461,14 @@ body {
     background: transparent !important;
     border: none !important;
     cursor: pointer;
-    transition: transform 0.15s ease;
 }
-.metro-marker:hover { transform: scale(1.3); z-index: 9999 !important; }
-.metro-marker:hover svg { transform: scale(1.2); transform-origin: center; overflow: visible; }
+.metro-marker:hover { z-index: 9999 !important; }
+.metro-marker > div {
+    transition: transform 0.15s ease;
+    transform-origin: center;
+}
+.metro-marker:hover > div { transform: scale(1.3); }
+.metro-marker:hover > div svg { overflow: visible; }
 
 .metro-delayed { animation: metro-pulse 1.4s ease-in-out infinite; }
 

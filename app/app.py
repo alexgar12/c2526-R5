@@ -32,10 +32,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import pandas as pd
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.cache import TTLCache
 from app.config import settings
@@ -71,7 +72,10 @@ async def lifespan(app: FastAPI):
     registry = ModelRegistry()
     entity = settings.wandb_entity
 
-    for loader, args in [
+    # Carga en paralelo: cada loader es network-bound (descarga artefacto W&B)
+    # y registra el error internamente, así que asyncio.gather sin return_exceptions
+    # es seguro. Cuello de botella original: 7 descargas serializadas en startup.
+    loaders = [
         (registry.load_dcrnn,          (entity, settings.wandb_project_dcrnn,   settings.dcrnn_artifact)),
         (registry.load_lgbm_delay_30m, (entity, settings.wandb_project_delay,   settings.lgbm_delay_30m_artifact)),
         (registry.load_lgbm_delay_end, (entity, settings.wandb_project_delay,   settings.lgbm_delay_end_artifact)),
@@ -79,8 +83,8 @@ async def lifespan(app: FastAPI):
         (registry.load_delta_20m,      (entity, settings.wandb_project_delay,   settings.delta_20m_artifact)),
         (registry.load_delta_30m,      (entity, settings.wandb_project_delay,   settings.delta_30m_artifact)),
         (registry.load_alertas,        (entity, settings.wandb_project_alertas, settings.alertas_artifact)),
-    ]:
-        await asyncio.to_thread(loader, *args)
+    ]
+    await asyncio.gather(*(asyncio.to_thread(loader, *args) for loader, args in loaders))
 
     if registry.errors:
         logger.warning("Some models failed to load: %s", list(registry.errors.keys()))
@@ -371,6 +375,12 @@ async def _live_broadcast(app: FastAPI) -> None:
     while True:
         await asyncio.sleep(60)
         try:
+            # Si no hay clientes conectados, no merece la pena correr el modelo:
+            # el resultado se descartaría inmediatamente. Ahorra una inferencia
+            # por minuto en idle.
+            if not app.state.ws_manager.has_clients():
+                continue
+
             from app.models.alertas_infer import run_alerts
 
             registry = app.state.registry
@@ -428,6 +438,10 @@ class _ConnectionManager:
         if ws in self._connections:
             self._connections.remove(ws)
 
+    def has_clients(self) -> bool:
+        """Devuelve True si hay al menos una conexión WebSocket activa."""
+        return bool(self._connections)
+
     async def broadcast(self, message: str) -> None:
         """
         Envía un mensaje de texto a todas las conexiones WebSocket activas.
@@ -455,6 +469,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Comprime respuestas JSON > 1 KiB. /api/shapes y /api/routes son de varios cientos
+# de KiB y se reducen ~3-4× con gzip; los WebSockets quedan exentos por defecto.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -476,17 +494,22 @@ def root(request: Request):
     return templates.TemplateResponse(request, name="index.html")
 
 
+_STATIC_CACHE_HEADER = "public, max-age=3600"
+
+
 @app.get("/api/stations")
-def get_stations(request: Request):
+def get_stations(request: Request, response: Response):
     """
     Devuelve la lista completa de estaciones con sus metadatos.
 
     Parámetros:
         request: Objeto Request de FastAPI (accede a app.state.stations_meta).
+        response: Para fijar Cache-Control (datos construidos una vez en startup).
 
     Retorna:
         Lista de dicts con 'id', 'name', 'lat', 'lon' y 'routes' por estación.
     """
+    response.headers["Cache-Control"] = _STATIC_CACHE_HEADER
     return [
         {"id": sid, **data}
         for sid, data in request.app.state.stations_meta.items()
@@ -609,7 +632,7 @@ _ROUTE_ORDER: dict[str, list[str]] = {
 
 
 @app.get("/api/routes")
-def get_routes(request: Request):
+def get_routes(request: Request, response: Response):
     """
     Devuelve el orden canónico de stop_ids por línea para el mapa de la interfaz.
 
@@ -618,11 +641,13 @@ def get_routes(request: Request):
 
     Parámetros:
         request: Objeto Request de FastAPI.
+        response: Para fijar Cache-Control (datos derivados de stations_meta estático).
 
     Retorna:
         Dict con clave = route_id y valor = lista ordenada de stop_ids.
         Solo incluye líneas con al menos 2 paradas resueltas.
     """
+    response.headers["Cache-Control"] = _STATIC_CACHE_HEADER
     meta = request.app.state.stations_meta
 
     name_to_candidates: dict[str, list[tuple[str, set[str]]]] = {}
@@ -659,16 +684,18 @@ def get_routes(request: Request):
 
 
 @app.get("/api/shapes")
-def get_shapes(request: Request):
+def get_shapes(request: Request, response: Response):
     """
     Devuelve la geometría GTFS de cada línea para renderizar el mapa.
 
     Parámetros:
         request: Objeto Request de FastAPI.
+        response: Para fijar Cache-Control (geometría estática cargada en startup).
 
     Retorna:
         Dict con clave = route_id y valor = lista de segmentos [[lat, lon], ...].
     """
+    response.headers["Cache-Control"] = _STATIC_CACHE_HEADER
     return request.app.state.gtfs_shapes
 
 

@@ -25,11 +25,23 @@ Notas:
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from google.transit import gtfs_realtime_pb2
 
 logger = logging.getLogger(__name__)
+
+# Sesión compartida con pool de conexiones para reutilizar TCP/TLS contra
+# api-endpoint.mta.info (los 8 feeds van al mismo host).
+_SESSION = requests.Session()
+_SESSION.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16),
+)
+
+# Executor reutilizable: el fan-out es 8 feeds, network-bound.
+_FEED_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gtfsrt")
 
 # URLs de los feeds GTFS-RT agrupados por conjunto de líneas
 _FEEDS = {
@@ -104,14 +116,28 @@ def fetch_positions(
     """
     results = []
 
-    for feed_key, url in _FEEDS.items():
+    def _fetch(item):
+        feed_key, url = item
         try:
-            resp = requests.get(url, timeout=10)
+            resp = _SESSION.get(url, timeout=10)
             resp.raise_for_status()
-            msg = gtfs_realtime_pb2.FeedMessage()
-            msg.ParseFromString(resp.content)
+            return feed_key, resp.content, None
         except Exception as exc:
+            return feed_key, None, exc
+
+    # Descarga concurrente: 8 feeds al mismo host se solapan en red en vez
+    # de sumarse (~4-8 s → ~1-2 s wall en el caso típico).
+    fetched = list(_FEED_EXECUTOR.map(_fetch, _FEEDS.items()))
+
+    for feed_key, content, exc in fetched:
+        if exc is not None:
             logger.warning("Feed %s unavailable: %s", feed_key, exc)
+            continue
+        try:
+            msg = gtfs_realtime_pb2.FeedMessage()
+            msg.ParseFromString(content)
+        except Exception as exc:
+            logger.warning("Feed %s parse error: %s", feed_key, exc)
             continue
 
         now_ts = int(time.time())

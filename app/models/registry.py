@@ -25,6 +25,7 @@ Notas:
 import json
 import logging
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -136,6 +137,21 @@ class ModelRegistry:
         self.delta_30m: Optional[DeltaEntry] = None
         self.alertas: Optional[AlertEntry] = None
         self.errors: dict[str, str] = {}
+        # _api guarda la primera instancia creada únicamente para inicializar el
+        # singleton interno de wandb bajo lock. Cada hilo recibe su propia instancia
+        # (pool HTTP independiente) — wandb.Api no es thread-safe si se comparte.
+        self._api: Optional[wandb.Api] = None
+        self._api_lock = threading.Lock()
+
+    def _get_api(self) -> wandb.Api:
+        """
+        Inicializa el singleton de wandb bajo lock (solo la primera vez) y devuelve
+        una instancia nueva por llamada para que cada hilo tenga su propio pool HTTP.
+        """
+        with self._api_lock:
+            if self._api is None:
+                self._api = wandb.Api(timeout=120)
+        return wandb.Api(timeout=120)
 
     def _download(self, entity: str, project: str, artifact_ref: str) -> Path:
         """
@@ -165,14 +181,14 @@ class ModelRegistry:
                 logger.info("W&B error, retrying %s in %ds (attempt %d/4)…", artifact_ref, wait, attempt + 1)
                 time.sleep(wait)
             try:
-                api = wandb.Api(timeout=120)
+                api = self._get_api()
                 artifact = api.artifact(full_ref)
                 tmpdir = tempfile.mkdtemp(prefix="wandb_")
                 artifact.download(root=tmpdir)
                 return Path(tmpdir)
             except Exception as exc:
                 msg = str(exc).lower()
-                if "429" in str(exc) or "500" in str(exc) or "rate limit" in msg or "timed out" in msg or "timeout" in msg or "deadline" in msg:
+                if "429" in str(exc) or "500" in str(exc) or "rate limit" in msg or "timed out" in msg or "timeout" in msg or "deadline" in msg or "connection" in msg or "network" in msg or "comm" in msg:
                     last_exc = exc
                     continue
                 raise

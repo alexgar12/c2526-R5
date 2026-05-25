@@ -187,6 +187,8 @@ function markerRadiusForZoom(zoom) {
     return 3;
 }
 
+const _markerIconCache = new Map();
+
 /**
  * Genera un L.divIcon con una o varias burbujas coloreadas
  * (una por línea que pasa por la parada), alineadas horizontalmente.
@@ -194,6 +196,9 @@ function markerRadiusForZoom(zoom) {
 function createMetroMarker(routes, zoom) {
     const routeList = routes ? routes.split(' ') : [];
     const R = markerRadiusForZoom(zoom ?? map.getZoom());
+    const cacheKey = (routes || '') + '_' + R;
+    const cached = _markerIconCache.get(cacheKey);
+    if (cached) return cached;
     const GAP = Math.max(1, Math.round(R * 0.25));
     const n = routeList.length;
     const totalW = n * (R * 2) + (n - 1) * GAP;
@@ -223,12 +228,14 @@ function createMetroMarker(routes, zoom) {
                     ${circles}
                 </svg>`;
 
-    return L.divIcon({
+    const icon = L.divIcon({
         className: 'metro-marker',
         html: `<div style="pointer-events:auto">${svg}</div>`,
         iconSize: [totalW, totalH],
         iconAnchor: [totalW / 2, totalH / 2]
     });
+    _markerIconCache.set(cacheKey, icon);
+    return icon;
 }
 
 /**
@@ -292,7 +299,7 @@ function drawRouteLines(routeData, stationsById) {
                 opacity: 0.6,
                 lineJoin: 'round',
                 lineCap: 'round'
-            }).addTo(map);
+            }).addTo(shapeLayer);
 
             // Línea principal
             L.polyline(latlngs, {
@@ -302,7 +309,7 @@ function drawRouteLines(routeData, stationsById) {
                 lineJoin: 'round',
                 lineCap: 'round',
                 className: `metro-line metro-line-${lineCode}`
-            }).addTo(map);
+            }).addTo(shapeLayer);
         });
 
         // Guardar referencia al primer segmento para uso posterior
@@ -324,9 +331,7 @@ let rawShapesDataCache = null;
 function redrawShapes() {
     if (!rawShapesDataCache) return;
     
-    // Limpiar polilíneas viejas
-    Object.values(routePolylines).forEach(p => map.removeLayer(p));
-    borderPolylines.forEach(p => map.removeLayer(p));
+    shapeLayer.clearLayers();
     routePolylines = {};
     borderPolylines = [];
 
@@ -353,7 +358,7 @@ function redrawShapes() {
                     opacity: 0.5,
                     lineJoin: 'round',
                     lineCap: 'round'
-                }).addTo(map);
+                }).addTo(shapeLayer);
                 borderPolylines.push(border);
             }
 
@@ -365,7 +370,7 @@ function redrawShapes() {
                 lineJoin: 'round',
                 lineCap: 'round',
                 className: `metro-line metro-line-${routeCode}`
-            }).addTo(map);
+            }).addTo(shapeLayer);
 
             if (segIdx === 0) routePolylines[routeCode] = poly;
         });
@@ -375,19 +380,6 @@ function redrawShapes() {
 function drawShapeLines(shapesData) {
     rawShapesDataCache = shapesData;
     redrawShapes();
-    
-    // Ocultar líneas al empezar el zoom y redibujar al terminar
-    map.on('zoomstart', () => {
-        Object.values(routePolylines).forEach(p => {
-            if (p && p.getElement) {
-                const el = p.getElement();
-                if (el) el.style.opacity = '0';
-            }
-        });
-    });
-    map.on('zoomend', () => {
-        redrawShapes();
-    });
     
     console.log(`Shapes GTFS dibujados para ${Object.keys(shapesData).length} rutas.`);
 }
@@ -454,6 +446,7 @@ Promise.all([
     }
 });
 
+const shapeLayer = L.layerGroup().addTo(map);
 const trainLayer = L.layerGroup().addTo(map);
 
 function createTrainIcon(routeId, isPredictable = true) {
@@ -737,7 +730,7 @@ function openStationDetails(station) {
     const lineSelectors = document.getElementById('detail-line-selectors');
 
     detailPanel.classList.remove('hidden');
-    map.flyTo([station.lat, station.lon], 14, { duration: 1.5 });
+    map.flyTo([station.lat, station.lon], 14, { duration: 0.4 });
 
     nameEl.textContent   = station.name;
     lineSelectors.innerHTML = '';
@@ -904,7 +897,7 @@ function highlightStation(station) {
     selectedStationRing = L.marker([station.lat, station.lon], {
         icon: ringIcon, interactive: false, zIndexOffset: -100,
     }).addTo(map);
-    map.flyTo([station.lat, station.lon], 15, { duration: 1.2, easeLinearity: 0.4 });
+    map.flyTo([station.lat, station.lon], 15, { duration: 0.4, easeLinearity: 0.4 });
 }
 
 function normalize(str) {

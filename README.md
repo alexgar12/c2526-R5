@@ -165,7 +165,7 @@ Lo cual permite:
 - Procesamiento incremental
 - Re-ejecución parcial del pipeline en caso de fallo
 
-## 4. Configuración del entorno de desarrollo
+## 4. Configuración del entorno
 
 El proyecto utiliza Python y el gestor de dependencias `uv`.
 
@@ -220,7 +220,7 @@ La API necesita un token OAuth2 en formato JSON para acceder a Google Drive. El 
 uv run python generar_token_drive.py
 ```
 4. Inicia sesión con tu cuenta cuando se te redireccione.
-5. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
+5. Asegúrate de que las carpetas `MTA_Realtime_Windows`  y `MTA_Daily_Data` están compartidas con el email del usuario que completó el OAuth.
 
 #### Opción B — Crear tu propio OAuth Client (Desktop app)
 
@@ -238,7 +238,7 @@ uv run python generar_token_drive.py
 python generar_token_drive.py
 ```
 10. Inicia sesión con tu cuenta cuando se te redireccione.
-11. Asegúrate de que la carpeta `MTA_Realtime_Windows` está compartida con el email del usuario que completó el OAuth.
+11. Asegúrate de que las carpetas `MTA_Realtime_Windows`  y `MTA_Daily_Data` están compartidas con el email del usuario que completó el OAuth.
 
 ### Weights & Biases (W&B)
 
